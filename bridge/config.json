@@ -12,6 +12,12 @@
     "max_datagram_bytes": 4096,
     "max_targets": 16
   },
+  "damage_pulse": {
+    "enabled": true,
+    "duration_ms": 300,
+    "level": 1.0,
+    "notes": "All motors buzz together when the player loses health. total_max scales this (6 x 1.0 -> about 0.33 each); tune the level with the wearer."
+  },
   "strength": {
     "near_m": 0.0,
     "far_m": 10.0,

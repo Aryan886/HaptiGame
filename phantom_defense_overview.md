@@ -14,6 +14,8 @@ These supersede conflicting text below.
 - Haptics keys are **S** (stop) and **E** (enable). Scenarios are on keys **1–5**; key 5 runs a logged direction-identification trial (invisible targets, never revealed; the participant turns and clicks; 8 compass bearings × 3, shuffled; CSV under the Godot user data folder).
 - Audio is non-spatial generated tones only. The motor dashboard is toggled with F1 and hidden automatically during the trial.
 - `run_demo.bat [simulator|fake|serial]` starts the bridge, then the game. The game never launches the bridge.
+- **Damage buzz (changes the spec, agreed in the UI design review).** When a drone reaches the player and removes a health point, every motor buzzes together for about 300 ms at one fixed level (`damage_pulse` in `bridge/config.json`). It carries no direction. It pre-empts the direction cue, which then resumes. The game reports a per-session `damage_count` counter in every snapshot; only the bridge decides motor levels. The pulse obeys the existing safety rules: it starts only while armed and active, never queues while disarmed, and any disarm (S, stale input, protocol error, new session, link reconnect, pause, game over) ends it at once. A round-ending contact holds the game in play with no targets for about 0.5 s so the buzz can finish before the results screen. This replaces the "no global hit vibration" rule in section 6 for damage only; there is still no buzz on a successful shot.
+- UI polish (build brief `build_ui.md`): a title screen, a guided demo (1 → 2 → 3 → 4) with intro cards and results screens, a head-shaped haptics widget (F1: off / motors only / full debug), and a practice version of the trial (8 targets, widget visible, true-direction feedback, Shift+5). Trial CSVs gain `practice` and `dashboard_visible` columns. No visual or audio cue reveals a hidden drone's direction.
 
 ## 1. Project goal and claim boundary
 
@@ -190,7 +192,8 @@ Send one compact UTF-8 JSON object per UDP datagram to `127.0.0.1:9000` at `20 H
       "distance_m": 5.0,
       "time_to_contact_s": 2.6667
     }
-  ]
+  ],
+  "damage_count": 0
 }
 ```
 
@@ -200,6 +203,7 @@ Send one compact UTF-8 JSON object per UDP datagram to `127.0.0.1:9000` at `20 H
 - `bearing_deg`: finite degrees in `[0, 360)`, clockwise from camera forward. `distance_m`: finite horizontal distance, nonnegative; one Godot world unit is one meter for this project.
 - `time_to_contact_s`: finite nonnegative number for a directly approaching target, otherwise JSON `null`. Compute `max(distance_m - contact_radius_m, 0) / approach_speed_mps`; use `null` if speed is zero or the behavior does not approach. Never serialize infinity or NaN.
 - `targets` is the entire current set, including hidden and offscreen targets. Empty means no threat; disappearance cancels that target without requiring a separate destroy event.
+- `damage_count`: nonnegative integer, health lost so far in this session; 0 at a new session. A missing field means 0; a negative or non-integer value is a protocol error. It is a counter rather than an event flag so a dropped datagram cannot lose a hit. The bridge treats a session's first value as a baseline and buzzes all motors when it rises while armed and active.
 - On pause, game over, restart, loss of focus, S (stop) or normal exit, send `haptics_enabled: false` with `targets: []` immediately. Continue inactive snapshots while paused. Exit packets are best effort; watchdogs must handle a crash.
 
 ### B. Bridge → Godot: commanded output and status
@@ -219,11 +223,12 @@ Return telemetry at up to 20 Hz, including when output is zero. This six-motor e
   "bearing_deg": 90.0,
   "motor_angles_deg": [0, 60, 120, 180, 240, 300],
   "motor_levels": [0.0, 0.3, 0.3, 0.0, 0.0, 0.0],
-  "last_ack_seq": null
+  "last_ack_seq": null,
+  "pulse_active": false
 }
 ```
 
-`input_seq` echoes the latest accepted game sequence. Ignore telemetry from another game session or an older input sequence. `output_backend` is `simulator`, `serial` or `fake_serial` (in-process firmware model, no hardware); `link_state` is `simulated`, `ready`, `disconnected`, `stale` or `error`. `motor_levels` contains normalized final command values in the same order as `motor_angles_deg`, after calibration and limits; these are not measurements of vibration. For serial output, they correspond to the quantized device values divided by 255. `last_ack_seq` refers to the independent serial command sequence, or is `null` if none is known. It is not a game sequence or a physical sensor reading.
+`input_seq` echoes the latest accepted game sequence. Ignore telemetry from another game session or an older input sequence. `output_backend` is `simulator`, `serial` or `fake_serial` (in-process firmware model, no hardware); `link_state` is `simulated`, `ready`, `disconnected`, `stale` or `error`. `motor_levels` contains normalized final command values in the same order as `motor_angles_deg`, after calibration and limits; these are not measurements of vibration. For serial output, they correspond to the quantized device values divided by 255. `last_ack_seq` refers to the independent serial command sequence, or is `null` if none is known. It is not a game sequence or a physical sensor reading. `pulse_active` is true while the damage buzz is being commanded; then every level is equal and `selected_target_id` and `bearing_deg` are `null`.
 
 When no target is selected, use `selected_target_id: null`, `bearing_deg: null` and all-zero levels. When the bridge is unavailable, do not retain the last displayed levels as though still active. The bridge supplies the active layout; if it has never connected, show “layout unknown” rather than guessing.
 

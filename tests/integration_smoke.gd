@@ -84,6 +84,24 @@ func _run() -> void:
 	_check("restart leaves output off", not _any_level() and not game.haptics_latch, client.telemetry.get("motor_levels"))
 	_check("drone ids restart per session", game.drones.has("drone_001"), game.drones.keys())
 
+	# Damage buzz: the drone reaching the player buzzes every motor equally
+	# during the end-of-round hold, then output stops with the results screen.
+	game._start_scenario(3)
+	game.haptics_latch = true
+	await _wait(0.4)
+	_check("approach cue before contact", _any_level() and not client.pulse_active(), client.telemetry)
+	game.drones.values()[0].approach_speed_mps = 40.0
+	var pulse_levels := []
+	for i in 40:
+		await _wait(0.02)
+		if client.pulse_active():
+			pulse_levels = client.telemetry.get("motor_levels", [])
+			break
+	var equal := not pulse_levels.is_empty() and pulse_levels.all(func(l): return l > 0.0 and absf(l - pulse_levels[0]) < 0.0001)
+	_check("damage buzz: all motors equal", equal, pulse_levels)
+	await _wait(0.8)
+	_check("buzz ends with results", game.state == "results" and not _any_level() and not client.pulse_active(), [game.state, client.telemetry])
+
 	game._start_scenario(4)
 	game.haptics_latch = true
 	await _wait(4.0)

@@ -8,10 +8,11 @@ const UiTheme := preload("res://scripts/ui_theme.gd")
 const CONTROLS := [
 	["Mouse / left click", "Turn and look / shoot (trial: submit a direction)"],
 	["1 – 5", "Start a scenario directly"],
+	["Shift + 5", "Direction trial, practice version"],
 	["E / S", "Enable haptics / stop haptics immediately"],
 	["M", "Nearest-motor or blended (interpolated) output"],
 	["H", "Hidden mode on or off (restarts the scenario)"],
-	["F1", "Show or hide the motor dashboard (hidden in the trial)"],
+	["F1", "Haptics widget: off / motors only / full debug"],
 	["Esc", "Pause or resume"],
 	["R", "Restart with a new session (haptics turn off)"],
 ]

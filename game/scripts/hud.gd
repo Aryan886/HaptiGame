@@ -1,10 +1,13 @@
 extends CanvasLayer
-## Round HUD: top bar, HAPTICS OFF strip, status chips, crosshair and the F1
-## debug view. Draws only what the game and bridge report; the motor ring shows
-## the layout and commanded levels from telemetry and never computes output.
+## Round HUD: top bar, HAPTICS OFF strip, status chips, crosshair, the haptics
+## widget (F1: off / motors only / full debug) and the practice feedback dial.
+## Draws only what the game and bridge report; it never computes motor output.
 
 const UiTheme := preload("res://scripts/ui_theme.gd")
 const Menus := preload("res://scripts/menus.gd")
+const HeadWidget := preload("res://scripts/head_widget.gd")
+
+enum Widget { OFF, MOTORS, FULL }
 
 var menus: Menus
 
@@ -20,11 +23,16 @@ var _off_strip: PanelContainer
 var _haptics_chip: UiTheme.Chip
 var _mode_chip: UiTheme.Chip
 var _bridge_chip: UiTheme.Chip
+var _widget_panel: PanelContainer
+var _head: HeadWidget
+var _widget_footer: Label
 var _debug_panel: PanelContainer
 var _debug_label: Label
-var _ring: RingView
+var _dial_panel: PanelContainer
+var _dial: PracticeDial
+var _dial_label: Label
 var _crosshair: Crosshair
-var _debug_wanted := true
+var _widget_mode := Widget.MOTORS
 var _in_play := true
 
 
@@ -74,21 +82,52 @@ func _ready() -> void:
 	_crosshair.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(_crosshair)
 
-	_debug_panel = PanelContainer.new()
-	_debug_panel.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	_debug_panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
-	_debug_panel.grow_vertical = Control.GROW_DIRECTION_BEGIN
-	_debug_panel.position = Vector2(-16, -16)
-	_debug_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	root.add_child(_debug_panel)
-	var box := VBoxContainer.new()
-	_debug_panel.add_child(box)
-	_ring = RingView.new()
-	_ring.custom_minimum_size = Vector2(220, 220)
-	box.add_child(_ring)
+	# Bottom-right column, growing upward: practice dial, debug text, widget.
+	var column := VBoxContainer.new()
+	column.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	column.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	column.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	column.position = Vector2(-16, -16)
+	column.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	column.add_theme_constant_override("separation", 8)
+	root.add_child(column)
+
+	_dial_panel = _column_panel(column)
+	var dial_box := VBoxContainer.new()
+	_dial_panel.add_child(dial_box)
+	dial_box.add_child(UiTheme.label("PRACTICE FEEDBACK", UiTheme.SIZE_SMALL, UiTheme.CYAN, true))
+	_dial = PracticeDial.new()
+	_dial.custom_minimum_size = Vector2(150, 110)
+	dial_box.add_child(_dial)
+	_dial_label = UiTheme.label("", UiTheme.SIZE_SMALL, UiTheme.TEXT, true)
+	dial_box.add_child(_dial_label)
+	_dial_panel.visible = false
+
+	_debug_panel = _column_panel(column)
 	_debug_label = UiTheme.label("", UiTheme.SIZE_SMALL, UiTheme.MUTED)
 	_debug_label.custom_minimum_size = Vector2(360, 0)
-	box.add_child(_debug_label)
+	_debug_panel.add_child(_debug_label)
+
+	_widget_panel = _column_panel(column)
+	var widget_box := VBoxContainer.new()
+	widget_box.add_theme_constant_override("separation", 2)
+	_widget_panel.add_child(widget_box)
+	_head = HeadWidget.new()
+	_head.custom_minimum_size = Vector2(150, 132)
+	widget_box.add_child(_head)
+	_widget_footer = UiTheme.label("", UiTheme.SIZE_SMALL, UiTheme.MUTED, true)
+	_widget_footer.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	widget_box.add_child(_widget_footer)
+	_apply_widget()
+
+
+func _column_panel(column: Control) -> PanelContainer:
+	var panel := PanelContainer.new()
+	panel.size_flags_horizontal = Control.SIZE_SHRINK_END
+	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.add_theme_stylebox_override("panel", UiTheme.panel_box(UiTheme.CYAN_DIM, UiTheme.CYAN, UiTheme.PANEL, 8.0))
+	column.add_child(panel)
+	return panel
 
 
 func _build_top_bar(root: Control) -> void:
@@ -130,13 +169,15 @@ func _build_top_bar(root: Control) -> void:
 	row.add_child(_score_label)
 
 
-## `timer_fraction` < 0 hides the timer bar (only the survival round has one).
+## `timer_fraction` < 0 hides the timer bar (only the survival round has one);
+## `score` < 0 hides the score and `max_health` 0 the pips (the trial has neither).
 func update_round(scenario_name: String, tag: String, health: int, max_health: int, score: int,
 		timer_fraction: float, seconds_left: float) -> void:
 	_scenario_label.text = scenario_name.to_upper()
 	_tag_label.text = tag
 	_pips.set_health(health, max_health)
 	_score_label.text = "SCORE %02d" % score
+	_score_label.visible = score >= 0
 	_timer_box.visible = timer_fraction >= 0.0
 	if _timer_box.visible:
 		_timer_bar.set_fraction(timer_fraction, seconds_left)
@@ -192,22 +233,35 @@ static func bridge_chip(status: String, telemetry: Dictionary) -> Array:
 	return ["%s %s" % [device, link.to_upper()], UiTheme.RED]
 
 
-## Top bar, crosshair and debug view show only in play and pause; menus keep
+## Top bar, crosshair and widget show only in play and pause; menus keep
 ## the chips and the HAPTICS OFF strip.
 func set_in_play(in_play: bool) -> void:
 	_in_play = in_play
 	_top_bar.visible = in_play
 	_crosshair.visible = in_play
-	_debug_panel.visible = _debug_wanted and in_play
+	_apply_widget()
 
 
-func set_debug_visible(shown: bool) -> void:
-	_debug_wanted = shown
-	_debug_panel.visible = shown and _in_play
+## Widget.OFF, MOTORS (head and motors) or FULL (adds drone dots, the selected
+## bearing and telemetry text). game.gd decides the mode.
+func set_widget_mode(mode: Widget) -> void:
+	_widget_mode = mode
+	_apply_widget()
 
 
-func is_debug_visible() -> bool:
-	return _debug_wanted
+func widget_mode() -> Widget:
+	return _widget_mode
+
+
+func is_widget_visible() -> bool:
+	return _widget_panel.visible
+
+
+func _apply_widget() -> void:
+	_widget_panel.visible = _in_play and _widget_mode != Widget.OFF
+	_debug_panel.visible = _in_play and _widget_mode == Widget.FULL
+	_head.full_debug = _widget_mode == Widget.FULL
+	_dial_panel.visible = _dial_panel.visible and _in_play
 
 
 func flash_hit() -> void:
@@ -218,12 +272,32 @@ func is_hit_marker_showing() -> bool:
 	return _crosshair.flash > 0.0
 
 
-func update_debug(text: String, telemetry: Dictionary, last_known_angles: Array, game_bearings: Array) -> void:
-	_debug_label.text = text
-	_ring.telemetry = telemetry
-	_ring.last_known_angles = last_known_angles
-	_ring.game_bearings = game_bearings
-	_ring.queue_redraw()
+## `game_bearings` and `debug_text` are only drawn in full debug.
+func update_widget(telemetry: Dictionary, last_known_angles: Array, game_bearings: Array,
+		footer: String, debug_text: String) -> void:
+	_head.telemetry = telemetry
+	_head.last_known_angles = last_known_angles
+	_head.game_bearings = game_bearings if _widget_mode == Widget.FULL else []
+	_widget_footer.text = footer
+	_debug_label.text = debug_text if _widget_mode == Widget.FULL else ""
+
+
+## Practice only, after a response: true bearing against the answer, in the
+## trial frame (0 = view at spawn, clockwise).
+func show_practice_feedback(true_bearing: float, response: float, signed_error: float) -> void:
+	_dial.true_bearing = true_bearing
+	_dial.response = response
+	_dial.queue_redraw()
+	_dial_label.text = "TRUE %d°   ANSWER %d°\nERROR %+d°" % [roundi(true_bearing), roundi(response), roundi(signed_error)]
+	_dial_panel.visible = _in_play
+
+
+func clear_practice_feedback() -> void:
+	_dial_panel.visible = false
+
+
+func is_practice_feedback_visible() -> bool:
+	return _dial_panel.visible
 
 
 func _spacer() -> Control:
@@ -307,43 +381,22 @@ class TimerBar extends Control:
 				draw_rect(Rect2(rect.position, Vector2(w * fill, size.y)), color)
 
 
-class RingView extends Control:
-	## Fresh motor_state telemetry, or empty when the bridge is unavailable.
-	var telemetry: Dictionary = {}
-	var last_known_angles: Array = []
-	## Game-side target bearings (for comparison only, never used for output).
-	var game_bearings: Array = []
+## Dial for practice feedback: forward tick, true bearing (green) and the
+## answer (cyan).
+class PracticeDial extends Control:
+	var true_bearing := 0.0
+	var response := 0.0
 
 	func _draw() -> void:
-		var center := size / 2.0
-		var radius := minf(size.x, size.y) / 2.0 - 22.0
-		draw_arc(center, radius, 0, TAU, 64, Color(UiTheme.CYAN_DIM, 0.8), 1.5)
-		# Forward marker: top of the ring is camera forward.
-		draw_line(center + Vector2(0, -radius - 14), center + Vector2(0, -radius + 6), UiTheme.CYAN, 2.0)
-		var font := UiTheme.FONT
+		var c := size / 2.0
+		var r := minf(size.x, size.y) / 2.0 - 6.0
+		draw_arc(c, r, 0, TAU, 48, UiTheme.CYAN_DIM, 1.5)
+		draw_line(c + Vector2(0, -r - 4), c + Vector2(0, -r + 5), UiTheme.TEXT, 2.0)
+		draw_line(c, c + _dir(true_bearing) * r, UiTheme.GREEN, 3.0)
+		draw_circle(c + _dir(true_bearing) * r, 4.0, UiTheme.GREEN)
+		draw_line(c, c + _dir(response) * r * 0.85, UiTheme.CYAN, 2.0)
+		draw_circle(c, 3.0, UiTheme.TEXT)
 
-		for b in game_bearings:
-			draw_circle(center + _dir(b) * radius * 0.55, 4.0, Color(UiTheme.RED, 0.7))
-
-		var fresh := not telemetry.is_empty()
-		var angles: Array = telemetry["motor_angles_deg"] if fresh else last_known_angles
-		if angles.is_empty():
-			draw_string(font, center + Vector2(-50, 5), "layout unknown", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, UiTheme.MUTED)
-			return
-		var levels: Array = telemetry["motor_levels"] if fresh else []
-		for i in angles.size():
-			var p: Vector2 = center + _dir(angles[i]) * radius
-			if fresh:
-				var level := float(levels[i])
-				draw_circle(p, 9.0 + 9.0 * level, Color(0.12, 0.16, 0.2).lerp(UiTheme.CYAN, level))
-				draw_string(font, p + Vector2(-12, 30), "%.2f" % level, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, UiTheme.TEXT)
-			else:
-				draw_circle(p, 9.0, UiTheme.GREY)
-				draw_string(font, p + Vector2(-4, 30), "?", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, UiTheme.MUTED)
-		if fresh and typeof(telemetry.get("bearing_deg")) != TYPE_NIL:
-			draw_line(center, center + _dir(telemetry["bearing_deg"]) * radius * 0.85, UiTheme.AMBER, 3.0)
-
-	## Bearing is clockwise from forward; screen up is forward.
-	func _dir(bearing_deg) -> Vector2:
-		var a := deg_to_rad(float(bearing_deg))
+	func _dir(bearing_deg: float) -> Vector2:
+		var a := deg_to_rad(bearing_deg)
 		return Vector2(sin(a), -cos(a))

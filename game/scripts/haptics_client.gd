@@ -23,11 +23,16 @@ var game_state := "paused"
 var haptics_enabled := false
 var haptic_mode := "interpolated"
 var targets: Array = []
+## Health lost in this session. A counter, not an event flag, so a dropped
+## datagram cannot lose a hit; the bridge buzzes all motors when it rises.
+var damage_count := 0
 
 ## Latest accepted telemetry, or an empty Dictionary if none is fresh.
 var telemetry: Dictionary = {}
 ## Last layout the bridge reported in this run; kept only to draw grey markers.
 var last_known_angles: Array = []
+## Last output backend the bridge reported in this run ("" if none yet).
+var last_known_backend := ""
 var socket_error := ""
 
 var _udp := PacketPeerUDP.new()
@@ -83,6 +88,7 @@ func start_new_session() -> void:
 	_last_telemetry_ms = -1
 	haptics_enabled = false
 	targets = []
+	damage_count = 0
 	telemetry_changed.emit()
 
 
@@ -117,6 +123,7 @@ func send_snapshot() -> void:
 		"haptics_enabled": active,
 		"haptic_mode": haptic_mode,
 		"targets": _bounded_targets() if game_state == "playing" else [],
+		"damage_count": damage_count,
 	}
 	var bytes := JSON.stringify(packet).to_utf8_buffer()
 	if bytes.size() > MAX_DATAGRAM_BYTES:
@@ -135,6 +142,11 @@ func last_sent_seq() -> int:
 
 func is_telemetry_fresh() -> bool:
 	return _last_telemetry_ms >= 0 and Time.get_ticks_msec() - _last_telemetry_ms <= TELEMETRY_STALE_MS
+
+
+## True while the bridge reports the all-motor damage buzz.
+func pulse_active() -> bool:
+	return telemetry.get("pulse_active", false) == true
 
 
 func status_text() -> String:
@@ -184,6 +196,7 @@ func _poll_telemetry() -> void:
 	if not newest.is_empty():
 		telemetry = newest
 		last_known_angles = newest["motor_angles_deg"]
+		last_known_backend = newest["output_backend"]
 		_last_telemetry_ms = Time.get_ticks_msec()
 		telemetry_changed.emit()
 
@@ -215,6 +228,8 @@ func _telemetry_problem(msg) -> String:
 	for l in levels:
 		if not _is_number(l) or l < 0.0 or l > 1.0:
 			return "bad motor level"
+	if msg.has("pulse_active") and typeof(msg["pulse_active"]) != TYPE_BOOL:
+		return "bad pulse_active"
 	var b = msg.get("bearing_deg")
 	if typeof(b) != TYPE_NIL and (not _is_number(b) or b < 0.0 or b >= 360.0):
 		return "bad bearing_deg"

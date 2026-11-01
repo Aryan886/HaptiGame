@@ -26,12 +26,15 @@ const INTRO_CARDS := {
 	Scenario.TRIAL: ["Turn toward the vibration and click. Targets never appear.",
 		"One buzz per target."],
 }
+const PRACTICE_NAME := "Direction trial · practice"
+const PRACTICE_FEEL := " After each click you'll see the true direction."
 const GUIDED_SEQUENCE: Array[int] = [Scenario.STATIONARY_REAR, Scenario.ORBIT, Scenario.HIDDEN_APPROACH, Scenario.SURVIVAL]
 ## Game states the bridge accepts; menu states are reported as "paused".
 const BRIDGE_STATES := ["playing", "paused", "game_over"]
 const DRONE_SCENE := preload("res://scenes/drone.tscn")
 const HapticsClient := preload("res://scripts/haptics_client.gd")
 const DroneScript := preload("res://scripts/drone.gd")
+const Hud := preload("res://scripts/hud.gd")
 const ENEMY_LAYER := 2
 
 @export_group("Round")
@@ -46,6 +49,8 @@ const ENEMY_LAYER := 2
 @export var max_live_drones := 6
 @export var camera_height_m := 1.6
 @export var reveal_cone_deg := 15.0
+## After a round-ending contact, stay in play this long so the damage buzz plays.
+@export var end_hold_s := 0.5
 
 @export_group("Showcase")
 @export var showcase_bearing_deg := 135.0
@@ -58,6 +63,7 @@ const ENEMY_LAYER := 2
 @export var trial_repeats := 3
 @export var trial_distance_m := 6.0
 @export var trial_gap_s := 1.5
+@export var practice_gap_s := 3.0
 
 @onready var player: Node3D = $player
 @onready var hud: CanvasLayer = $hud
@@ -69,6 +75,8 @@ var scenario := Scenario.STATIONARY_REAR
 ## title, intro, playing, paused, results or game_over.
 var state := "title"
 var guided := false
+## The practice trial: scenario 5 with 8 targets, widget shown and feedback.
+var practice := false
 var haptics_latch := false
 var haptic_mode := "interpolated"
 var hidden_mode := true
@@ -82,6 +90,11 @@ var _elapsed := 0.0
 var _play_time := 0.0  # seconds in play this scenario; stops while paused
 var _guided_index := 0
 var _pending_scenario := Scenario.STATIONARY_REAR
+var _pending_practice := false
+var _widget_pref := Hud.Widget.MOTORS  # last F1 choice
+var _widget_override := -1  # F1 choice made in this scenario, or -1
+var _end_hold_left := 0.0
+var _end_hold_action := Callable()
 var _rng := RandomNumberGenerator.new()
 var _sfx := {}
 
@@ -93,7 +106,6 @@ var _trial_gap_left := 0.0
 var _trial_errors: Array[float] = []
 var _trial_file: FileAccess
 var _trial_path := ""
-var _debug_before_trial := true
 
 
 func _ready() -> void:
@@ -150,12 +162,15 @@ func _unhandled_input(event: InputEvent) -> void:
 		if state in ["playing", "paused"] and scenario != Scenario.TRIAL:
 			_start_scenario(scenario)
 	elif event.is_action_pressed("toggle_debug"):
-		hud.set_debug_visible(not hud.is_debug_visible())
+		# Both trials force the widget (off / motors only); F1 cannot change it there.
+		if not (scenario == Scenario.TRIAL and state in ["playing", "paused"]):
+			_widget_override = (_widget_mode() + 1) % 3
+			_widget_pref = _widget_override
 	else:
 		for s in SCENARIO_NAMES:
 			if event.is_action_pressed("scenario_%d" % s):
 				guided = false
-				_start_scenario(s)
+				_start_scenario(s, s == Scenario.TRIAL and event is InputEventKey and event.shift_pressed)
 				break
 	_refresh_hud()
 
@@ -164,6 +179,11 @@ func _physics_process(delta: float) -> void:
 	if state != "playing":
 		return
 	_play_time += delta
+	if _end_hold_left > 0.0:
+		_end_hold_left -= delta
+		if _end_hold_left <= 0.0:
+			_finish_hold()
+		return
 	match scenario:
 		Scenario.SURVIVAL:
 			_update_survival(delta)
@@ -194,14 +214,17 @@ func _show_title() -> void:
 	var entries := [["guided", "Start guided demo", "GUIDED DEMO"]]
 	for s in SCENARIO_NAMES:
 		entries.append(["scenario:%d" % s, SCENARIO_NAMES[s], "SCENARIOS" if s == Scenario.STATIONARY_REAR else ""])
+	entries.append(["practice", PRACTICE_NAME, ""])
 	hud.menus.show_title(entries)
 
 
-func _show_intro(s: Scenario) -> void:
+func _show_intro(s: Scenario, is_practice := false) -> void:
 	_pending_scenario = s
+	_pending_practice = is_practice
 	_enter_menu("intro")
 	var card: Array = INTRO_CARDS[s]
-	hud.menus.show_intro(SCENARIO_NAMES[s], _step_text(), card[0], card[1])
+	hud.menus.show_intro(PRACTICE_NAME if is_practice else SCENARIO_NAMES[s], _step_text(), card[0],
+		card[1] + (PRACTICE_FEEL if is_practice else ""))
 
 
 ## `end_state` is "results" or "game_over" (scenario 4 and health loss).
@@ -210,19 +233,25 @@ func _show_results(rows: Array, end_state := "results") -> void:
 	var next_label := ""
 	if guided:
 		next_label = "Finish" if _guided_index >= GUIDED_SEQUENCE.size() - 1 else "Next"
-	hud.menus.show_results(SCENARIO_NAMES[scenario], _step_text(), rows, next_label)
+	hud.menus.show_results(_scenario_title(), _step_text(), rows, next_label)
 
 
 ## Leave play: no drones, no input, visible mouse, inactive snapshot now.
 func _enter_menu(new_state: String) -> void:
 	_finish_trial_file()
 	_clear_drones()
+	_end_hold_left = 0.0
+	hud.clear_practice_feedback()
 	state = new_state
 	get_tree().paused = false
 	player.input_enabled = false
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	hud.set_in_play(false)
 	haptics.set_inactive(_bridge_state())
+
+
+func _scenario_title() -> String:
+	return PRACTICE_NAME if practice and scenario == Scenario.TRIAL else SCENARIO_NAMES[scenario]
 
 
 func _step_text() -> String:
@@ -236,7 +265,7 @@ func _on_menu(action: String) -> void:
 			_guided_index = 0
 			_show_intro(GUIDED_SEQUENCE[0])
 		"start":
-			_start_scenario(_pending_scenario)
+			_start_scenario(_pending_scenario, _pending_practice)
 		"back", "title":
 			_show_title()
 		"next":
@@ -246,7 +275,10 @@ func _on_menu(action: String) -> void:
 			else:
 				_show_intro(GUIDED_SEQUENCE[_guided_index])
 		"retry", "restart":
-			_start_scenario(scenario)
+			_start_scenario(scenario, practice)
+		"practice":
+			guided = false
+			_show_intro(Scenario.TRIAL, true)
 		"resume":
 			_set_paused(false)
 		"controls":
@@ -262,12 +294,14 @@ func _on_menu(action: String) -> void:
 
 # --- scenarios -------------------------------------------------------------
 
-func _start_scenario(s: Scenario) -> void:
+func _start_scenario(s: Scenario, is_practice := false) -> void:
 	_finish_trial_file()
-	if scenario == Scenario.TRIAL and s != Scenario.TRIAL:
-		hud.set_debug_visible(_debug_before_trial)
 	_clear_drones()
+	_end_hold_left = 0.0
+	hud.clear_practice_feedback()
 	scenario = s
+	practice = is_practice and s == Scenario.TRIAL
+	_widget_override = -1
 	health = start_health
 	score = 0
 	_elapsed = 0.0
@@ -288,6 +322,7 @@ func _start_scenario(s: Scenario) -> void:
 		Scenario.TRIAL:
 			_start_trial()
 	haptics.send_snapshot()
+	_refresh_hud()  # apply the widget mode now, not a frame later
 
 
 func _set_state_playing() -> void:
@@ -299,6 +334,9 @@ func _set_state_playing() -> void:
 
 
 func _set_paused(paused: bool) -> void:
+	if paused and _end_hold_left > 0.0:
+		_finish_hold()  # the round is already over; go straight to its results
+		return
 	if paused:
 		state = "paused"
 		get_tree().paused = true
@@ -322,13 +360,27 @@ func _game_over(outcome: String) -> void:
 	], "game_over")
 
 
-## Single-target scenarios 1-3: timings are from spawn, in play time.
-func _scenario_complete(outcome: String, d: Area3D, destroyed: bool) -> void:
-	_show_results([
+## Results for single-target scenarios 1-3: timings are from spawn, in play time.
+func _single_target_rows(outcome: String, d: Area3D, destroyed: bool) -> Array:
+	return [
 		["Outcome", outcome],
 		["Time to find", "%.1f s" % (d.found_at_s - d.spawned_at_s) if d.found_at_s >= 0.0 else "Not found"],
 		["Time to destroy", "%.1f s" % (_play_time - d.spawned_at_s) if destroyed else "-"],
-	])
+	]
+
+
+## A contact ended the round: stay in play with no targets and no input for
+## end_hold_s, so the bridge's damage buzz plays before the inactive snapshot.
+func _hold_then(action: Callable) -> void:
+	_clear_drones()
+	player.input_enabled = false
+	_end_hold_action = action
+	_end_hold_left = end_hold_s
+
+
+func _finish_hold() -> void:
+	_end_hold_left = 0.0
+	_end_hold_action.call()
 
 
 func _update_survival(delta: float) -> void:
@@ -347,10 +399,8 @@ func _update_survival(delta: float) -> void:
 # --- trial mode --------------------------------------------------------------
 
 func _start_trial() -> void:
-	_debug_before_trial = hud.is_debug_visible()
-	hud.set_debug_visible(false)
 	_trial_queue.clear()
-	for i in trial_repeats:
+	for i in (1 if practice else trial_repeats):
 		_trial_queue.append_array(trial_bearings_deg)
 	_shuffle(_trial_queue)
 	_trial_total = _trial_queue.size()
@@ -360,10 +410,14 @@ func _start_trial() -> void:
 
 
 func _update_trial(delta: float) -> void:
-	if not drones.is_empty() or _trial_queue.is_empty():
+	if not drones.is_empty():
 		return
 	_trial_gap_left -= delta
 	if _trial_gap_left > 0.0:
+		return
+	hud.clear_practice_feedback()  # always cleared before the next target spawns
+	if _trial_queue.is_empty():
+		_finish_trial()
 		return
 	_trial_bearing = _trial_queue.pop_back()
 	var d := _spawn_drone(DroneScript.Behavior.STATIONARY, _trial_bearing, trial_distance_m)
@@ -387,7 +441,11 @@ func _record_trial_response() -> void:
 	_remove_drone(drone)
 	_play("click")
 	_trial_gap_left = trial_gap_s
-	if _trial_queue.is_empty():
+	if practice:
+		# Feedback only after the response; it stays up through the longer gap.
+		hud.show_practice_feedback(_trial_bearing, response, signed_error)
+		_trial_gap_left = practice_gap_s
+	elif _trial_queue.is_empty():
 		_finish_trial()
 
 
@@ -400,7 +458,6 @@ func _finish_trial() -> void:
 			within_octant += 1
 	var n := _trial_errors.size()
 	_finish_trial_file()
-	hud.set_debug_visible(_debug_before_trial)
 	_show_results([
 		["Responses", str(n)],
 		["Mean absolute error", "%.1f°" % (total / maxf(n, 1))],
@@ -412,12 +469,12 @@ func _finish_trial() -> void:
 func _open_trial_file() -> void:
 	DirAccess.make_dir_recursive_absolute("user://trials")
 	var stamp := Time.get_datetime_string_from_system().replace(":", "-")
-	_trial_path = "user://trials/trial_%s.csv" % stamp
+	_trial_path = "user://trials/%s_%s.csv" % ["practice" if practice else "trial", stamp]
 	_trial_file = FileAccess.open(_trial_path, FileAccess.WRITE)
 	if _trial_file == null:
 		push_error("cannot write trial log %s (error %d)" % [_trial_path, FileAccess.get_open_error()])
 		return
-	_trial_file.store_line("session_id,trial,true_bearing_deg,response_bearing_deg,signed_error_deg,abs_error_deg,response_time_s,haptic_mode,haptics_enabled,bridge_status,output_backend,motor_angles_deg")
+	_trial_file.store_line("session_id,trial,true_bearing_deg,response_bearing_deg,signed_error_deg,abs_error_deg,response_time_s,haptic_mode,haptics_enabled,bridge_status,output_backend,motor_angles_deg,practice,dashboard_visible")
 
 
 func _write_trial_row(response: float, signed_error: float, seconds: float) -> void:
@@ -425,10 +482,13 @@ func _write_trial_row(response: float, signed_error: float, seconds: float) -> v
 		return
 	var t: Dictionary = haptics.telemetry
 	var angles := " ".join(t.get("motor_angles_deg", []).map(func(a): return str(a)))
-	_trial_file.store_line("%s,%d,%.1f,%.1f,%.1f,%.1f,%.3f,%s,%s,%s,%s,%s" % [
+	# dashboard_visible records what was on screen at the response; the real
+	# trial forces the widget off, so it is always false there.
+	_trial_file.store_line("%s,%d,%.1f,%.1f,%.1f,%.1f,%.3f,%s,%s,%s,%s,%s,%s,%s" % [
 		haptics.session_id, _trial_errors.size(), _trial_bearing, response, signed_error,
 		absf(signed_error), seconds, haptic_mode, haptics_latch,
-		haptics.status_text().replace(",", ";"), t.get("output_backend", "none"), angles])
+		haptics.status_text().replace(",", ";"), t.get("output_backend", "none"), angles,
+		practice, hud.is_widget_visible()])
 	_trial_file.flush()
 
 
@@ -483,17 +543,18 @@ func _on_drone_defeated(d: Area3D) -> void:
 	_play("hit")
 	hud.flash_hit()
 	if drones.is_empty() and scenario in [Scenario.STATIONARY_REAR, Scenario.ORBIT, Scenario.HIDDEN_APPROACH]:
-		_scenario_complete("Target destroyed", d, true)
+		_show_results(_single_target_rows("Target destroyed", d, true))
 
 
 func _on_drone_contacted(d: Area3D) -> void:
-	_remove_drone(d)
 	health -= 1
+	haptics.damage_count += 1  # sent with the snapshot below; the bridge buzzes all motors
+	_remove_drone(d)
 	_play("damage")
 	if health <= 0:
-		_game_over("Out of health")
+		_hold_then(_game_over.bind("Out of health"))
 	elif drones.is_empty() and scenario == Scenario.HIDDEN_APPROACH:
-		_scenario_complete("The drone reached you", d, false)
+		_hold_then(_show_results.bind(_single_target_rows("The drone reached you", d, false)))
 
 
 func _on_shot_fired(collider: Object) -> void:
@@ -550,11 +611,41 @@ func _refresh_hud() -> void:
 	if scenario == Scenario.TRIAL:
 		tag = "TARGET %d / %d" % [_trial_total - _trial_queue.size(), _trial_total]
 	var timer := time_left / round_length_s if scenario == Scenario.SURVIVAL else -1.0
-	hud.update_round(SCENARIO_NAMES[scenario], tag, health, start_health, score, timer, time_left)
+	var trial := scenario == Scenario.TRIAL
+	hud.update_round(_scenario_title(), tag, health, 0 if trial else start_health, -1 if trial else score, timer, time_left)
 	hud.update_haptics(haptics_latch, state == "playing", haptic_mode, haptics.status_text(), haptics.telemetry)
 
-	if hud.is_debug_visible():
-		hud.update_debug(_debug_text(), haptics.telemetry, haptics.last_known_angles, _threat_targets().map(func(t): return t["bearing_deg"]))
+	var mode := _widget_mode()
+	hud.set_widget_mode(mode)
+	var full := mode == Hud.Widget.FULL and state in ["playing", "paused"]
+	hud.update_widget(haptics.telemetry, haptics.last_known_angles,
+		_threat_targets().map(func(t): return t["bearing_deg"]) if full else [],
+		"%s · %s" % [_backend_label(), "NEAREST" if haptic_mode == "nearest" else "BLEND"],
+		_debug_text() if full else "")
+
+
+## Off in the real trial, motors only in practice. In hidden scenarios 1 and 3
+## it starts off on real serial hardware (so the audience feels rather than
+## reads), motors only for the simulator and fake device. F1 overrides it.
+func _widget_mode() -> int:
+	if scenario == Scenario.TRIAL:
+		return Hud.Widget.MOTORS if practice else Hud.Widget.OFF
+	if _widget_override >= 0:
+		return _widget_override
+	if scenario in [Scenario.STATIONARY_REAR, Scenario.HIDDEN_APPROACH] and haptics.last_known_backend == "serial":
+		return Hud.Widget.OFF
+	return _widget_pref
+
+
+func _backend_label() -> String:
+	match haptics.last_known_backend:
+		"simulator":
+			return "SIMULATOR"
+		"fake_serial":
+			return "FAKE SERIAL"
+		"serial":
+			return "SERIAL"
+	return "NO BRIDGE"
 
 
 func _debug_text() -> String:

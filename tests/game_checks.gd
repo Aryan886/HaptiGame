@@ -3,6 +3,7 @@ extends SceneTree
 ## Run: godot --headless --path game --script ../tests/game_checks.gd
 
 const HapticsClient := preload("res://scripts/haptics_client.gd")
+const Hud := preload("res://scripts/hud.gd")
 
 var failures := 0
 var game: Node
@@ -46,7 +47,7 @@ func _run() -> void:
 	# Front end: the title screen has no drones and reports an inactive state.
 	_check("starts on title", game.state == "title" and game.hud.menus.screen == "title" and game.drones.is_empty(), [game.state, game.hud.menus.screen])
 	_check("title sends inactive", client.game_state == "paused" and not client.haptics_enabled, client.game_state)
-	_check("title lists guided demo and 5 scenarios", game.hud.menus.button_labels().size() == 6, game.hud.menus.button_labels())
+	_check("title lists guided demo, 5 scenarios and practice", game.hud.menus.button_labels().size() == 7, game.hud.menus.button_labels())
 
 	# title -> intro -> playing, through the buttons.
 	_press("1 Hidden target")
@@ -96,6 +97,7 @@ func _run() -> void:
 	await _wait(0.6)
 	_check("contact costs one health", game.health == game.start_health - 1 and game.drones.is_empty(), [game.health, game.drones])
 	_check("contact clears targets", client.targets.is_empty(), client.targets)
+	_check("contact counts damage for the buzz", client.damage_count == 1, client.damage_count)
 
 	# Pause stops motion and sends an inactive snapshot.
 	game._start_scenario(3)
@@ -129,14 +131,35 @@ func _run() -> void:
 	await _wait(0.1)
 	for drone in game.drones.values():
 		drone.approach_speed_mps = 50.0
-	await _wait(0.5)
+	await _wait(0.3)
+	_check("final hit holds in play for the buzz", game.state == "playing" and game.drones.is_empty() and not game.player.input_enabled, [game.state, game.drones])
+	await _wait(0.6)
 	_check("zero health -> game over", game.state == "game_over" and game.health == 0, [game.state, game.health])
+
+	# Scenario 3 reached: hold in play (no targets) for the buzz, then results; pause skips the hold.
+	game._start_scenario(3)
+	game.haptics_latch = true
+	var damage_before: int = client.damage_count
+	game.drones.values()[0].approach_speed_mps = 40.0
+	await _wait(0.4)
+	_check("reached: damage counted", client.damage_count == damage_before + 1, client.damage_count)
+	_check("reached: holding in play", game.state == "playing" and client.game_state == "playing" and client.targets.is_empty(), [game.state, client.targets])
+	await _wait(0.6)
+	_check("reached -> results after hold", game.state == "results", game.state)
+	game._start_scenario(3)
+	game.drones.values()[0].approach_speed_mps = 40.0
+	await _wait(0.4)
+	game._set_paused(true)
+	_check("pause during hold -> results", game.state == "results", game.state)
+	_check("new session resets damage count", _restart_session() == 0, client.damage_count)
 
 	# Trial: invisible, response logged, error near zero when aimed exactly.
 	game.trial_repeats = 1
 	game.trial_gap_s = 0.1
 	game._start_scenario(5)
-	_check("trial hides debug view", not game.hud.is_debug_visible(), game.hud.is_debug_visible())
+	_check("trial forces widget off", game._widget_mode() == Hud.Widget.OFF and not game.hud.is_widget_visible(), game._widget_mode())
+	_f1()
+	_check("F1 ignored in the real trial", game._widget_mode() == Hud.Widget.OFF and not game.hud.is_widget_visible(), game._widget_mode())
 	for i in 2:
 		await _wait(0.3)
 		var target: Area3D = game.drones.values()[0]
@@ -152,7 +175,66 @@ func _run() -> void:
 	var path := ProjectSettings.globalize_path(game._trial_path)
 	var csv := FileAccess.get_file_as_string(game._trial_path)
 	_check("trial csv has header + 2 rows", csv.split("\n", false).size() == 3, path)
+	_check("real trial csv: practice=false, dashboard_visible=false", _csv_column(csv, "practice") == ["false", "false"]
+		and _csv_column(csv, "dashboard_visible") == ["false", "false"], csv)
 	DirAccess.remove_absolute(path)
+
+	# Practice trial (Shift+5): 8 targets, widget motors only, feedback after each response.
+	game.practice_gap_s = 0.4
+	var shift5 := InputEventKey.new()
+	shift5.physical_keycode = KEY_5
+	shift5.shift_pressed = true
+	shift5.pressed = true
+	game._unhandled_input(shift5)
+	_check("Shift+5 starts practice", game.practice and game.scenario == 5 and game._trial_total == 8, [game.practice, game._trial_total])
+	_check("practice widget motors only", game._widget_mode() == Hud.Widget.MOTORS and game.hud.is_widget_visible(), game._widget_mode())
+	_f1()
+	_check("F1 ignored in practice", game._widget_mode() == Hud.Widget.MOTORS, game._widget_mode())
+	for i in 2:
+		await _wait(0.2)
+		_check("practice: no feedback while a target is live (%d)" % i, not game.hud.is_practice_feedback_visible(), "")
+		game.player._cooldown = 0.0
+		game.player.try_shoot()
+		await _wait(0.05)
+		_check("practice: feedback after response (%d)" % i, game.hud.is_practice_feedback_visible() and game.drones.is_empty(), game.drones)
+		await _wait(0.45)
+		_check("practice: feedback cleared when next target spawns (%d)" % i, not game.hud.is_practice_feedback_visible() and game.drones.size() == 1, game.drones)
+	csv = FileAccess.get_file_as_string(game._trial_path)
+	_check("practice csv file name", game._trial_path.get_file().begins_with("practice_"), game._trial_path)
+	_check("practice csv: practice=true, dashboard_visible=true", _csv_column(csv, "practice") == ["true", "true"]
+		and _csv_column(csv, "dashboard_visible") == ["true", "true"], csv)
+	game._start_scenario(1)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(game._trial_path))
+	game.trial_gap_s = 1.5
+
+	# F1 cycles off -> motors only -> full debug; default is motors only.
+	game._widget_pref = Hud.Widget.MOTORS
+	game._start_scenario(2)
+	_check("widget default motors only", game._widget_mode() == Hud.Widget.MOTORS and game.hud.is_widget_visible(), game._widget_mode())
+	_f1()
+	_check("F1 -> full debug", game._widget_mode() == Hud.Widget.FULL and game.hud.is_widget_visible(), game._widget_mode())
+	_f1()
+	_check("F1 -> off", game._widget_mode() == Hud.Widget.OFF and not game.hud.is_widget_visible(), game._widget_mode())
+	_f1()
+	_check("F1 -> motors only", game._widget_mode() == Hud.Widget.MOTORS and game.hud.is_widget_visible(), game._widget_mode())
+
+	# Serial hardware: widget starts off in hidden scenarios 1 and 3; F1 overrides per scenario.
+	client.last_known_backend = "serial"
+	var modes := []
+	for sc in [1, 2, 3]:
+		game._start_scenario(sc)
+		await process_frame
+		modes.append(game._widget_mode())
+	_check("serial: widget off in 1 and 3, motors in 2", modes == [Hud.Widget.OFF, Hud.Widget.MOTORS, Hud.Widget.OFF], modes)
+	_f1()
+	_check("serial: F1 overrides in 3", game._widget_mode() == Hud.Widget.MOTORS, game._widget_mode())
+	game._start_scenario(3)
+	_check("serial: override resets on restart", game._widget_mode() == Hud.Widget.OFF, game._widget_mode())
+	for backend in ["simulator", "fake_serial"]:
+		client.last_known_backend = backend
+		game._start_scenario(1)
+		_check("%s: widget motors only in 1" % backend, game._widget_mode() == Hud.Widget.MOTORS, game._widget_mode())
+	client.last_known_backend = ""
 
 	# Pause -> Title clears the drones and sends an inactive snapshot.
 	game._start_scenario(4)
@@ -197,6 +279,31 @@ func _run() -> void:
 
 	print("game checks: %s" % ("PASS" if failures == 0 else "%d FAILURES" % failures))
 	quit(1 if failures > 0 else 0)
+
+
+func _f1() -> void:
+	var ev := InputEventAction.new()
+	ev.action = "toggle_debug"
+	ev.pressed = true
+	game._unhandled_input(ev)
+
+
+func _restart_session() -> int:
+	var ev := InputEventAction.new()
+	ev.action = "restart"
+	ev.pressed = true
+	game._unhandled_input(ev)
+	return client.damage_count
+
+
+## Values of one CSV column, header excluded.
+func _csv_column(csv: String, column: String) -> Array:
+	var lines := csv.split("\n", false)
+	var index := Array(lines[0].split(",")).find(column)
+	var out := []
+	for line in lines.slice(1):
+		out.append(line.split(",")[index] if index >= 0 else "")
+	return out
 
 
 ## Press a visible menu button by its label.
