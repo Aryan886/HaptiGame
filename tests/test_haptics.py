@@ -205,6 +205,84 @@ class BridgeStateTests(unittest.TestCase):
         self.assertEqual(b.tick(0.05)["selected_target_id"], "drone_008")
 
 
+PULSE = round(2.0 / 6, 6)  # level 1.0 on six motors, scaled by total_max 2.0
+
+
+class DamagePulseTests(unittest.TestCase):
+    def hit(self, b, seq, now, damage=1, **kw):
+        b.handle_datagram(snapshot(seq, [DRONE_90], damage_count=damage, **kw), now)
+
+    def test_increase_while_armed_buzzes_all_then_cue_resumes(self):
+        b = make_bridge()
+        seq = arm(b)
+        self.assertEqual(b.tick(0.0)["motor_levels"], [0.0, 0.3, 0.3, 0.0, 0.0, 0.0])
+        self.hit(b, seq + 1, 0.05)
+        t = b.tick(0.05)
+        self.assertEqual(t["motor_levels"], [PULSE] * 6)
+        self.assertTrue(t["pulse_active"])
+        self.assertIsNone(t["bearing_deg"], "the pulse carries no direction")
+        self.hit(b, seq + 2, 0.2)
+        self.assertEqual(b.tick(0.34)["motor_levels"], [PULSE] * 6)
+        self.hit(b, seq + 3, 0.34)
+        t = b.tick(0.36)
+        self.assertFalse(t["pulse_active"])
+        self.assertEqual(t["motor_levels"], [0.0, 0.3, 0.3, 0.0, 0.0, 0.0])
+        self.assertEqual(t["selected_target_id"], "drone_007")
+
+    def test_increase_while_disarmed_gives_no_pulse(self):
+        b = make_bridge()
+        b.handle_datagram(snapshot(0, enabled=False), 0.0)
+        b.handle_datagram(snapshot(1, enabled=False, damage_count=1), 0.01)
+        self.hit(b, 2, 0.02)  # arms with the same count: nothing queued
+        t = b.tick(0.02)
+        self.assertFalse(t["pulse_active"])
+        self.assertEqual(t["motor_levels"], [0.0, 0.3, 0.3, 0.0, 0.0, 0.0])
+
+    def test_first_snapshot_of_session_sets_baseline_only(self):
+        b = make_bridge()
+        b.handle_datagram(snapshot(0, enabled=False, damage_count=2), 0.0)
+        self.hit(b, 1, 0.01, damage=2)
+        self.assertFalse(b.tick(0.01)["pulse_active"])
+        b.handle_datagram(snapshot(0, enabled=False, session="game_002", damage_count=5), 0.02)
+        b.handle_datagram(snapshot(1, [DRONE_90], session="game_002", damage_count=5), 0.03)
+        t = b.tick(0.03)
+        self.assertFalse(t["pulse_active"], "a new session's first count is a baseline")
+        self.assertTrue(any(t["motor_levels"]))
+
+    def test_stop_stale_and_new_session_end_pulse_immediately(self):
+        cases = {
+            "S": lambda b, seq: b.handle_datagram(snapshot(seq, [DRONE_90], enabled=False, damage_count=1), 0.1),
+            "stale": lambda b, seq: None,
+            "new session": lambda b, seq: b.handle_datagram(snapshot(0, [DRONE_90], session="game_new", damage_count=1), 0.1),
+            "pause": lambda b, seq: b.handle_datagram(snapshot(seq, [DRONE_90], state="paused", damage_count=1), 0.1),
+        }
+        for name, action in cases.items():
+            with self.subTest(name):
+                b = make_bridge()
+                seq = arm(b)
+                self.hit(b, seq + 1, 0.05)
+                self.assertTrue(b.tick(0.05)["pulse_active"])
+                action(b, seq + 2)
+                t = b.tick(0.31 if name == "stale" else 0.1)
+                self.assertFalse(t["pulse_active"])
+                self.assertFalse(any(t["motor_levels"]))
+
+    def test_rejects_bad_damage_count(self):
+        for bad in (-1, 1.5, 1.0, True, "1", None):
+            with self.subTest(bad):
+                with self.assertRaises(ProtocolError):
+                    parse_snapshot(snapshot(1, damage_count=bad))
+        self.assertEqual(parse_snapshot(snapshot(1)).damage_count, 0, "missing field means 0")
+
+    def test_disabled_in_config_gives_no_pulse(self):
+        config = {**CONFIG, "damage_pulse": {**CONFIG["damage_pulse"], "enabled": False}}
+        p = CONFIG["profiles"]["six"]
+        b = Bridge(config, p, SimulatorOutput(6))
+        seq = arm(b)
+        self.hit(b, seq + 1, 0.05)
+        self.assertFalse(b.tick(0.05)["pulse_active"])
+
+
 class SerialPathTests(unittest.TestCase):
     def setUp(self):
         self.clock = Clock()
@@ -319,6 +397,24 @@ class SerialPathTests(unittest.TestCase):
             t = b.tick(self.clock.t)
         self.assertEqual(t["link_state"], "stale")
         self.assertFalse(any(t["motor_levels"]))
+
+    def test_damage_pulse_sends_all_channel_frames(self):
+        b, _ = self.serial_bridge(channel_map=[5, 4, 3, 2, 1, 0])
+        b.tick(self.clock.t)
+        seq = arm(b, self.clock.t)
+        b.tick(self.clock.t)
+        dev = self.devices[-1]
+        self.assertEqual(dev.outputs(), [0, 0, 0, 77, 77, 0])
+        self.clock.t += 0.05
+        b.handle_datagram(snapshot(seq + 1, [DRONE_90], damage_count=1), self.clock.t)
+        t = b.tick(self.clock.t)
+        self.assertTrue(dev.log[-1].endswith(",85,85,85,85,85,85"), dev.log[-1])
+        self.assertEqual(dev.outputs(), [85] * 6)
+        self.assertTrue(t["pulse_active"])
+        self.clock.t += 0.3
+        b.handle_datagram(snapshot(seq + 2, [DRONE_90], damage_count=1), self.clock.t)
+        b.tick(self.clock.t)
+        self.assertEqual(dev.outputs(), [0, 0, 0, 77, 77, 0], "direction cue resumes after the pulse")
 
     def test_refuses_eight_motor_profile_on_six_channel_firmware(self):
         with self.assertRaises(SystemExit):

@@ -23,26 +23,33 @@ run_demo.bat simulator --profile eight
 
 To start the two parts by hand, run `python bridge/main.py --backend simulator` first, then open `game/` in Godot or run `C:\Godot\Godot_v4.7.2-stable_win64.exe --path game`. The game also runs without the bridge; the HUD then shows **bridge unavailable**.
 
-Haptics are **off at startup**. Press **E** to enable them.
+The game opens on a **title screen**. **Start guided demo** runs scenarios 1 → 2 → 3 → 4, each with an intro card (what to do, what to feel), play, then a results screen with **Next**. The scenario list starts any scenario with its intro card; keys 1–5 start one directly from anywhere.
+
+Haptics are **off at startup**. Press **E** to enable them. An amber **HAPTICS OFF · PRESS E** strip stays on screen until you do.
 
 ## Controls
 
 | Key | Action |
 |---|---|
 | Mouse / left click | Turn and look / shoot (in the trial: submit a direction) |
-| 1 | Hidden stationary target behind you and to the right |
+| 1 | Hidden target (stationary) |
 | 2 | Orbiting target |
-| 3 | Hidden approaching target |
+| 3 | Approaching target (hidden) |
 | 4 | 60 s survival round |
-| 5 | Direction trial (24 targets, invisible, logged) |
+| 5 | Direction trial (24 targets, invisible, logged; widget forced off) |
+| Shift + 5 | Practice trial (8 targets, widget shown, true direction shown after each click; also on the title screen) |
 | E / S | Enable haptics / stop haptics immediately |
 | M | Switch between nearest-motor and interpolated-motor output |
 | H | Toggle hidden mode and restart the scenario |
-| F1 | Show or hide the motor dashboard (hidden automatically during the trial) |
-| Esc | Pause or resume |
+| F1 | Haptics widget: off → motors only → full debug (drone dots, selected bearing, telemetry). Ignored in both trials |
+| Esc | Pause menu (Resume, Restart, Controls, Title) or resume |
 | R | Restart with a new session (haptics turn off) |
 
-Trial results are saved as CSV files in `%APPDATA%\Godot\app_userdata\Phantom Defense\trials\`. The game shows the exact path when a trial ends.
+The **haptics widget** (bottom right) is a top-down head wearing the headband: the nose marks camera forward and the motors sit where the bridge's layout puts them, growing and glowing with their commanded level. It starts as motors only. In scenarios 1 and 3 on real serial hardware it starts off, so the audience feels rather than reads the cue; F1 still shows it.
+
+When a drone reaches you, every motor buzzes together for about 300 ms (the widget lights all motors red), then the direction cue resumes. The buzz is decided by the bridge and obeys S, the watchdog and arming like any other output.
+
+Trial results are saved as CSV files (`trial_*.csv`, or `practice_*.csv` for the practice version) in `%APPDATA%\Godot\app_userdata\Phantom Defense\trials\`. The results screen shows the exact path when a trial ends. The `practice` column marks practice runs and `dashboard_visible` records whether the widget was on screen at each response (always `false` in the real trial).
 
 ## Recovery
 
@@ -68,7 +75,7 @@ Both `bridge/` and the game check themselves against the same fixtures in `tests
 1. Wire the motors through transistors or a motor driver, never directly from GPIO pins, and fit a physical power cut-off. Set `MOTOR_PINS` in `firmware/phantom_haptics/phantom_haptics.ino` and flash it with the ESP32 Arduino core.
 2. Open a serial monitor at 115200 baud. Check that `HELLO` returns `READY,6`. Check that `H,1,150,0,120,0,0,0,0` runs M2 for about 150 ms and returns `ACK,1`. Check that `STOP` returns `STOPPED`, and that output stops when no command arrives for 500 ms.
 3. Set `serial.port` in `bridge/config.json` (or pass `--port`). Trigger each channel on its own, record its physical position, then fix `channel_map`.
-4. Set `channel_min` (startup threshold) and `channel_max` (comfortable cap) for each channel, plus `total_max`, with the wearer.
+4. Set `channel_min` (startup threshold) and `channel_max` (comfortable cap) for each channel, plus `total_max`, with the wearer. Then tune the damage buzz with the wearer: `damage_pulse.level` and `duration_ms`. `total_max` still scales it (six motors at level 1.0 with `total_max` 2.0 give about 0.33 each).
 5. Run `run_demo.bat serial`. The dashboard should show `serial ready` and an advancing ACK sequence. An ACK means the firmware accepted a frame; it doesn't prove that a motor vibrated.
 
 ## Known limitations

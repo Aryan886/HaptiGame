@@ -75,6 +75,7 @@ class Bridge:
         self.timeout_s = config["freshness_timeout_ms"] / 1000.0
         self.limits = config["limits"]
         self.strength_cfg = config["strength"]
+        self.pulse_cfg = config["damage_pulse"]
         self.rlog = RateLimitedLog()
 
         self.session_id: Optional[str] = None
@@ -85,6 +86,10 @@ class Bridge:
         self.armed = False
         self.saw_disabled = False
         self.current_target_id: Optional[str] = None
+        # Damage pulse: baseline of the session's damage counter, and the end
+        # time of a running all-motor buzz (None when no pulse is running).
+        self.last_damage_count: Optional[int] = None
+        self.pulse_until: Optional[float] = None
         self._seen_link_generation = output.link_generation
         self._output_active = False
         self._last_stop = -1e9
@@ -108,6 +113,7 @@ class Bridge:
             self.last_seq = -1
             self.snapshot = None
             self.current_target_id = None
+            self.last_damage_count = None
             self._disarm("new session", now)
         if snap.seq <= self.last_seq:
             return  # duplicate or reordered; does not refresh the watchdog
@@ -117,9 +123,16 @@ class Bridge:
         if not snap.haptics_enabled or snap.game_state != "playing":
             self.saw_disabled = True
             self.armed = False
+            self.pulse_until = None
         elif self.saw_disabled and self.output.ready and not self.armed:
             self.armed = True
             log.info("output armed")
+        # The first snapshot of a session only sets the baseline; increases
+        # while disarmed or inactive update it without queueing a pulse.
+        previous, self.last_damage_count = self.last_damage_count, snap.damage_count
+        if (previous is not None and snap.damage_count > previous and self.pulse_cfg["enabled"]
+                and self.armed and snap.haptics_enabled and snap.game_state == "playing"):
+            self.pulse_until = now + self.pulse_cfg["duration_ms"] / 1000.0
 
     # --- output ----------------------------------------------------------------
     def tick(self, now: float) -> Optional[dict]:
@@ -138,9 +151,23 @@ class Bridge:
         active = self.armed and snap is not None and snap.haptics_enabled and snap.game_state == "playing"
         target = select_target(snap.targets, self.current_target_id) if active else None
         self.current_target_id = target.id if target else None
+        pulse = active and self.pulse_until is not None and now < self.pulse_until
+        if not pulse:
+            self.pulse_until = None
+        else:
+            target = None  # the pulse pre-empts the direction cue; selection state is kept
 
         commanded = [0.0] * len(self.angles)
-        if target is not None:
+        if pulse:
+            # Every motor at one fixed level: no direction. Calibration and
+            # total_max still apply.
+            levels = calibrate([self.pulse_cfg["level"]] * len(self.angles), self.profile["channel_min"],
+                               self.profile["channel_max"], self.profile["total_max"])
+            sent = self.output.write_levels(levels, now)
+            if sent is not None:
+                commanded = sent
+                self._output_active = True
+        elif target is not None:
             s = self.strength_cfg
             strength = strength_for_distance(target.distance_m, s["near_m"], s["far_m"], s["min"], s["max"])
             levels = map_bearing(target.bearing_deg, self.angles, strength, snap.haptic_mode)
@@ -149,7 +176,7 @@ class Bridge:
             if sent is not None:
                 commanded = sent
                 self._output_active = True
-        if target is None or not any(commanded):
+        if not any(commanded):
             if self._output_active or now - self._last_stop >= 1.0:
                 self.output.stop(now)
                 self._last_stop = now
@@ -170,6 +197,7 @@ class Bridge:
             "motor_angles_deg": self.angles,
             "motor_levels": [round(v, 6) for v in commanded],
             "last_ack_seq": self.output.last_ack_seq,
+            "pulse_active": pulse,
         }
 
     def _disarm(self, reason: str, now: float) -> None:
@@ -177,6 +205,7 @@ class Bridge:
             log.info("output disarmed: %s", reason)
         self.armed = False
         self.saw_disabled = False
+        self.pulse_until = None
         if self._output_active:
             self.output.stop(now)
             self._last_stop = now
@@ -195,6 +224,9 @@ def load_config(path: Path) -> dict:
         raise ValueError("strength.far_m must be greater than strength.near_m")
     if not 0 <= s["min"] <= s["max"] <= 1:
         raise ValueError("strength min/max must satisfy 0 <= min <= max <= 1")
+    pulse = config["damage_pulse"]
+    if not isinstance(pulse["enabled"], bool) or not pulse["duration_ms"] > 0 or not 0 < pulse["level"] <= 1:
+        raise ValueError("damage_pulse needs enabled (bool), duration_ms > 0 and 0 < level <= 1")
     return config
 
 

@@ -14,6 +14,8 @@ signal shot_fired(collider: Object)
 @onready var ray: RayCast3D = $pitch_pivot/camera/ray
 
 var input_enabled := false
+## World point where the last shot ended: the hit, or the end of its range.
+var last_shot_end := Vector3.ZERO
 var _cooldown := 0.0
 
 
@@ -43,7 +45,13 @@ func try_shoot() -> void:
 	_cooldown = shot_cooldown_s
 	# Ray results are cached between physics steps; refresh after camera motion.
 	ray.force_raycast_update()
+	last_shot_end = ray.get_collision_point() if ray.is_colliding() else ray.to_global(ray.target_position)
 	shot_fired.emit(ray.get_collider() if ray.is_colliding() else null)
+
+
+## Where shot effects start: just below and right of the camera.
+func muzzle_position() -> Vector3:
+	return camera.to_global(Vector3(0.1, -0.13, -0.5))
 
 
 ## Yaw-only view basis used for haptic bearings.

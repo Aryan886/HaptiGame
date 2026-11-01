@@ -36,6 +36,7 @@ class Snapshot:
     haptics_enabled: bool
     haptic_mode: str
     targets: tuple[Target, ...]
+    damage_count: int = 0
 
 
 # --- validation ---------------------------------------------------------------
@@ -81,6 +82,9 @@ def validate_snapshot(msg, max_targets: int = 16) -> Snapshot:
         raise ProtocolError("haptics_enabled must be a boolean")
     if msg.get("haptic_mode") not in HAPTIC_MODES:
         raise ProtocolError(f"unknown haptic_mode {msg.get('haptic_mode')!r}")
+    damage_count = msg.get("damage_count", 0)
+    if not isinstance(damage_count, int) or isinstance(damage_count, bool) or damage_count < 0:
+        raise ProtocolError(f"damage_count must be a nonnegative integer, got {damage_count!r}")
     raw_targets = msg.get("targets")
     if not isinstance(raw_targets, list):
         raise ProtocolError("targets must be a list")
@@ -109,7 +113,8 @@ def validate_snapshot(msg, max_targets: int = 16) -> Snapshot:
             raise ProtocolError(f"target {tid}: time_to_contact_s must be null or finite nonnegative, got {ttc!r}")
         targets.append(Target(tid, float(bearing), float(distance), None if ttc is None else float(ttc)))
 
-    return Snapshot(session_id, seq, msg["game_state"], msg["haptics_enabled"], msg["haptic_mode"], tuple(targets))
+    return Snapshot(session_id, seq, msg["game_state"], msg["haptics_enabled"], msg["haptic_mode"], tuple(targets),
+                    damage_count)
 
 
 # --- selection ----------------------------------------------------------------
