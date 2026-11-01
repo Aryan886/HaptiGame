@@ -23,26 +23,28 @@ run_demo.bat simulator --profile eight
 
 To start the two parts by hand, run `python bridge/main.py --backend simulator` first, then open `game/` in Godot or run `C:\Godot\Godot_v4.7.2-stable_win64.exe --path game`. The game also runs without the bridge; the HUD then shows **bridge unavailable**.
 
-Haptics are **off at startup**. Press **E** to enable them.
+The game opens on a **title screen**. **Start guided demo** runs scenarios 1 → 2 → 3 → 4, each with an intro card (what to do, what to feel), play, then a results screen with **Next**. The scenario list starts any scenario with its intro card; keys 1–5 start one directly from anywhere.
+
+Haptics are **off at startup**. Press **E** to enable them. An amber **HAPTICS OFF · PRESS E** strip stays on screen until you do.
 
 ## Controls
 
 | Key | Action |
 |---|---|
 | Mouse / left click | Turn and look / shoot (in the trial: submit a direction) |
-| 1 | Hidden stationary target behind you and to the right |
+| 1 | Hidden target (stationary) |
 | 2 | Orbiting target |
-| 3 | Hidden approaching target |
+| 3 | Approaching target (hidden) |
 | 4 | 60 s survival round |
 | 5 | Direction trial (24 targets, invisible, logged) |
 | E / S | Enable haptics / stop haptics immediately |
 | M | Switch between nearest-motor and interpolated-motor output |
 | H | Toggle hidden mode and restart the scenario |
 | F1 | Show or hide the motor dashboard (hidden automatically during the trial) |
-| Esc | Pause or resume |
+| Esc | Pause menu (Resume, Restart, Controls, Title) or resume |
 | R | Restart with a new session (haptics turn off) |
 
-Trial results are saved as CSV files in `%APPDATA%\Godot\app_userdata\Phantom Defense\trials\`. The game shows the exact path when a trial ends.
+Trial results are saved as CSV files in `%APPDATA%\Godot\app_userdata\Phantom Defense\trials\`. The results screen shows the exact path when a trial ends.
 
 ## Recovery
 

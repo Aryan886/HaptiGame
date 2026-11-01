@@ -21,6 +21,8 @@ func _run() -> void:
 	game = load("res://scenes/main.tscn").instantiate()
 	root.add_child(game)
 	client = game.get_node("haptics_client")
+	_check("starts on title", game.state == "title", game.state)
+	game._start_scenario(1)  # keys 1-5 skip the title screen and intro card
 	await _wait(0.6)
 
 	if not expect_bridge:

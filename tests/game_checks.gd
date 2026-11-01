@@ -40,8 +40,21 @@ func _run() -> void:
 	_check("haptics off strip at start", game.hud.is_off_strip_visible() and game.hud.haptics_chip_text() == "HAPTICS OFF", game.hud.haptics_chip_text())
 	game.haptics_latch = true
 	await _wait(0.05)
-	_check("strip hidden when enabled", not game.hud.is_off_strip_visible() and game.hud.haptics_chip_text() == "HAPTICS ON", game.hud.haptics_chip_text())
+	_check("strip hidden when enabled", not game.hud.is_off_strip_visible() and game.hud.haptics_chip_text().begins_with("HAPTICS ON"), game.hud.haptics_chip_text())
 	game.haptics_latch = false
+
+	# Front end: the title screen has no drones and reports an inactive state.
+	_check("starts on title", game.state == "title" and game.hud.menus.screen == "title" and game.drones.is_empty(), [game.state, game.hud.menus.screen])
+	_check("title sends inactive", client.game_state == "paused" and not client.haptics_enabled, client.game_state)
+	_check("title lists guided demo and 5 scenarios", game.hud.menus.button_labels().size() == 6, game.hud.menus.button_labels())
+
+	# title -> intro -> playing, through the buttons.
+	_press("1 Hidden target")
+	_check("title -> intro", game.state == "intro" and game.hud.menus.screen == "intro" and game.drones.is_empty(), game.state)
+	_check("intro sends inactive", client.game_state == "paused", client.game_state)
+	_press("Start")
+	_check("intro -> playing", game.state == "playing" and game.drones.has("drone_001") and not game.hud.menus.visible, [game.state, game.drones.keys()])
+	await _wait(0.1)
 
 	# Hidden stationary target: tracked while invisible, revealed once in view, stays revealed.
 	var d: Area3D = game.drones["drone_001"]
@@ -60,6 +73,8 @@ func _run() -> void:
 	_check("hit marker on defeat", game.hud.is_hit_marker_showing(), "")
 	await _wait(0.05)
 	_check("defeat counted once", game.score == 1 and game.drones.is_empty(), [game.score, game.drones])
+	_check("completion -> results", game.state == "results" and game.hud.menus.button_labels() == ["Retry", "Title"], [game.state, game.hud.menus.button_labels()])
+	_check("results send inactive", client.game_state == "paused" and client.targets.is_empty(), client.game_state)
 
 	# Orbit changes bearing over time.
 	game._start_scenario(2)
@@ -139,6 +154,39 @@ func _run() -> void:
 	_check("trial csv has header + 2 rows", csv.split("\n", false).size() == 3, path)
 	DirAccess.remove_absolute(path)
 
+	# Pause -> Title clears the drones and sends an inactive snapshot.
+	game._start_scenario(4)
+	game.haptics_latch = true
+	await _wait(0.1)
+	_check("survival spawned a drone", game.drones.size() >= 1, game.drones.size())
+	game._set_paused(true)
+	_check("pause menu shown", game.hud.menus.screen == "paused", game.hud.menus.screen)
+	_press("Title")
+	await _wait(0.05)
+	_check("pause -> title clears drones", game.state == "title" and game.drones.is_empty() and game.enemies.get_child_count() == 0, [game.state, game.enemies.get_child_count()])
+	_check("pause -> title inactive", client.game_state == "paused" and client.targets.is_empty() and not client.haptics_enabled and not paused, [client.game_state, client.targets])
+
+	# Guided demo: scenario 1 -> results -> Next -> intro 2 -> scenario 2; Finish after 4.
+	_press("Start guided demo")
+	_check("guided opens intro 1", game.state == "intro" and game._pending_scenario == 1, [game.state, game._pending_scenario])
+	_press("Start")
+	await _wait(0.1)
+	game.drones.values()[0].resolve_defeat()
+	await _wait(0.05)
+	_check("guided 1 -> results with Next", game.state == "results" and game.hud.menus.button_labels() == ["Next", "Retry", "Title"], game.hud.menus.button_labels())
+	_press("Next")
+	_check("Next -> intro 2", game.state == "intro" and game._pending_scenario == 2, [game.state, game._pending_scenario])
+	_press("Start")
+	_check("Next starts scenario 2", game.state == "playing" and game.scenario == 2 and game.guided, [game.state, game.scenario])
+	game._guided_index = 3
+	game.round_length_s = 0.5
+	game._start_scenario(4)
+	await _wait(0.8)
+	_check("guided 4 ends with Finish", game.state == "game_over" and game.hud.menus.button_labels()[0] == "Finish", game.hud.menus.button_labels())
+	_press("Finish")
+	_check("Finish returns to title", game.state == "title" and not game.guided, game.state)
+	game.round_length_s = 60.0
+
 	# Repeated restarts do not leak drones.
 	game.trial_repeats = 3
 	for i in 30:
@@ -149,6 +197,15 @@ func _run() -> void:
 
 	print("game checks: %s" % ("PASS" if failures == 0 else "%d FAILURES" % failures))
 	quit(1 if failures > 0 else 0)
+
+
+## Press a visible menu button by its label.
+func _press(text: String) -> void:
+	for b in game.hud.menus.find_children("*", "Button", true, false):
+		if b.text == text and b.is_visible_in_tree():
+			b.pressed.emit()
+			return
+	_check("button '%s' on screen" % text, false, game.hud.menus.button_labels())
 
 
 func _wait(seconds: float) -> void:

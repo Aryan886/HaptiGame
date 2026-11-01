@@ -4,7 +4,11 @@ extends CanvasLayer
 ## the layout and commanded levels from telemetry and never computes output.
 
 const UiTheme := preload("res://scripts/ui_theme.gd")
+const Menus := preload("res://scripts/menus.gd")
 
+var menus: Menus
+
+var _top_bar: PanelContainer
 var _scenario_label: Label
 var _tag_label: Label
 var _timer_box: HBoxContainer
@@ -16,12 +20,12 @@ var _off_strip: PanelContainer
 var _haptics_chip: UiTheme.Chip
 var _mode_chip: UiTheme.Chip
 var _bridge_chip: UiTheme.Chip
-var _message_panel: PanelContainer
-var _message_label: Label
 var _debug_panel: PanelContainer
 var _debug_label: Label
 var _ring: RingView
 var _crosshair: Crosshair
+var _debug_wanted := true
+var _in_play := true
 
 
 func _ready() -> void:
@@ -33,6 +37,9 @@ func _ready() -> void:
 	add_child(root)
 
 	_build_top_bar(root)
+
+	menus = Menus.new()
+	root.add_child(menus)
 
 	_off_strip = PanelContainer.new()
 	_off_strip.add_theme_stylebox_override("panel", UiTheme.panel_box(UiTheme.AMBER, UiTheme.AMBER, Color(0.25, 0.15, 0.0, 0.7), 6.0))
@@ -62,17 +69,6 @@ func _ready() -> void:
 	_bridge_chip.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	chips.add_child(_bridge_chip)
 
-	_message_panel = PanelContainer.new()
-	_message_panel.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	_message_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	_message_panel.grow_vertical = Control.GROW_DIRECTION_BEGIN
-	_message_panel.position.y = -110
-	_message_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_message_label = UiTheme.label("", UiTheme.SIZE_LARGE)
-	_message_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_message_panel.add_child(_message_label)
-	root.add_child(_message_panel)
-
 	_crosshair = Crosshair.new()
 	_crosshair.set_anchors_preset(Control.PRESET_CENTER)
 	_crosshair.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -97,6 +93,7 @@ func _ready() -> void:
 
 func _build_top_bar(root: Control) -> void:
 	var bar := PanelContainer.new()
+	_top_bar = bar
 	bar.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE, Control.PRESET_MODE_MINSIZE, 12)
 	bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(bar)
@@ -195,17 +192,22 @@ static func bridge_chip(status: String, telemetry: Dictionary) -> Array:
 	return ["%s %s" % [device, link.to_upper()], UiTheme.RED]
 
 
-func show_message(text: String) -> void:
-	_message_label.text = text
-	_message_panel.visible = text != ""
+## Top bar, crosshair and debug view show only in play and pause; menus keep
+## the chips and the HAPTICS OFF strip.
+func set_in_play(in_play: bool) -> void:
+	_in_play = in_play
+	_top_bar.visible = in_play
+	_crosshair.visible = in_play
+	_debug_panel.visible = _debug_wanted and in_play
 
 
 func set_debug_visible(shown: bool) -> void:
-	_debug_panel.visible = shown
+	_debug_wanted = shown
+	_debug_panel.visible = shown and _in_play
 
 
 func is_debug_visible() -> bool:
-	return _debug_panel.visible
+	return _debug_wanted
 
 
 func flash_hit() -> void:

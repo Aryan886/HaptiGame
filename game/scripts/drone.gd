@@ -20,6 +20,9 @@ var alive := true
 var revealed := true
 ## False keeps the drone invisible for its whole life (trial mode).
 var reveal_allowed := true
+## Game play-time stamps for the results screen; found = first within the reveal cone.
+var spawned_at_s := 0.0
+var found_at_s := -1.0
 
 var _orbit_angle_deg := 0.0
 var _orbit_radius_m := 0.0
