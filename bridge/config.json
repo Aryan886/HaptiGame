@@ -1,0 +1,47 @@
+{
+  "network": {
+    "listen_host": "127.0.0.1",
+    "listen_port": 9000,
+    "telemetry_host": "127.0.0.1",
+    "telemetry_port": 9001
+  },
+  "output_backend": "simulator",
+  "active_profile": "six",
+  "freshness_timeout_ms": 250,
+  "limits": {
+    "max_datagram_bytes": 4096,
+    "max_targets": 16
+  },
+  "strength": {
+    "near_m": 0.0,
+    "far_m": 10.0,
+    "min": 0.2,
+    "max": 1.0
+  },
+  "profiles": {
+    "six": {
+      "motor_angles_deg": [0, 60, 120, 180, 240, 300],
+      "channel_map": [0, 1, 2, 3, 4, 5],
+      "channel_min": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+      "channel_max": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+      "total_max": 2.0,
+      "notes": "Provisional; no hardware yet. Replace channel_map/min/max after bench calibration."
+    },
+    "eight": {
+      "motor_angles_deg": [0, 45, 90, 135, 180, 225, 270, 315],
+      "channel_map": [0, 1, 2, 3, 4, 5, 6, 7],
+      "channel_min": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+      "channel_max": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+      "total_max": 2.0,
+      "notes": "Simulator profile; needs 8-channel firmware (set serial.firmware_channels) before hardware use."
+    }
+  },
+  "serial": {
+    "port": "COM3",
+    "baud": 115200,
+    "firmware_channels": 6,
+    "frame_duration_ms": 150,
+    "ready_timeout_ms": 3000,
+    "ack_timeout_ms": 500
+  }
+}

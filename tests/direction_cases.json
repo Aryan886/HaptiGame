@@ -1,0 +1,61 @@
+{
+  "notes": "Shared fixtures for the game (verify_directions.gd) and bridge (test_haptics.py). yaw_deg is a clockwise view turn in the bearing convention (yaw 90 faces world +X); pitch_deg tilts the camera up. Godot forward is -Z. Expected levels are before calibration.",
+  "bearing_cases": [
+    {"name": "front", "yaw_deg": 0, "pitch_deg": 0, "target": [0, 1.6, -5], "expected_bearing_deg": 0},
+    {"name": "right", "yaw_deg": 0, "pitch_deg": 0, "target": [5, 1.6, 0], "expected_bearing_deg": 90},
+    {"name": "behind", "yaw_deg": 0, "pitch_deg": 0, "target": [0, 1.6, 5], "expected_bearing_deg": 180},
+    {"name": "left", "yaw_deg": 0, "pitch_deg": 0, "target": [-5, 1.6, 0], "expected_bearing_deg": 270},
+    {"name": "front_right", "yaw_deg": 0, "pitch_deg": 0, "target": [3, 1.6, -3], "expected_bearing_deg": 45},
+    {"name": "rear_left", "yaw_deg": 0, "pitch_deg": 0, "target": [-3, 1.6, 3], "expected_bearing_deg": 225},
+    {"name": "turned_toward_plus_x", "yaw_deg": 90, "pitch_deg": 0, "target": [5, 1.6, 0], "expected_bearing_deg": 0},
+    {"name": "turned_toward_plus_x_pitched_up", "yaw_deg": 90, "pitch_deg": 50, "target": [5, 1.6, 0], "expected_bearing_deg": 0},
+    {"name": "pitched_down_right", "yaw_deg": 0, "pitch_deg": -55, "target": [5, 1.6, 0], "expected_bearing_deg": 90},
+    {"name": "turned_toward_plus_x_target_minus_z", "yaw_deg": 90, "pitch_deg": 0, "target": [0, 1.6, -5], "expected_bearing_deg": 270},
+    {"name": "coincident_horizontally", "yaw_deg": 0, "pitch_deg": 0, "target": [0, 4.0, 0], "expected_bearing_deg": null}
+  ],
+  "mapping_cases": [
+    {"name": "six_30_interp", "motor_angles_deg": [0, 60, 120, 180, 240, 300], "bearing_deg": 30, "strength": 0.6, "mode": "interpolated", "expected_levels": [0.3, 0.3, 0, 0, 0, 0]},
+    {"name": "six_90_interp", "motor_angles_deg": [0, 60, 120, 180, 240, 300], "bearing_deg": 90, "strength": 0.6, "mode": "interpolated", "expected_levels": [0, 0.3, 0.3, 0, 0, 0]},
+    {"name": "eight_22_5_interp", "motor_angles_deg": [0, 45, 90, 135, 180, 225, 270, 315], "bearing_deg": 22.5, "strength": 0.6, "mode": "interpolated", "expected_levels": [0.3, 0.3, 0, 0, 0, 0, 0, 0]},
+    {"name": "six_330_wrap", "motor_angles_deg": [0, 60, 120, 180, 240, 300], "bearing_deg": 330, "strength": 0.6, "mode": "interpolated", "expected_levels": [0.3, 0, 0, 0, 0, 0.3]},
+    {"name": "eight_359_wrap", "motor_angles_deg": [0, 45, 90, 135, 180, 225, 270, 315], "bearing_deg": 359, "strength": 0.6, "mode": "interpolated", "expected_levels": [0.586667, 0, 0, 0, 0, 0, 0, 0.013333]},
+    {"name": "six_30_nearest_tie_clockwise", "motor_angles_deg": [0, 60, 120, 180, 240, 300], "bearing_deg": 30, "strength": 0.6, "mode": "nearest", "expected_levels": [0, 0.6, 0, 0, 0, 0]},
+    {"name": "six_350_nearest_wraps_to_zero", "motor_angles_deg": [0, 60, 120, 180, 240, 300], "bearing_deg": 350, "strength": 0.6, "mode": "nearest", "expected_levels": [0.6, 0, 0, 0, 0, 0]},
+    {"name": "six_on_motor", "motor_angles_deg": [0, 60, 120, 180, 240, 300], "bearing_deg": 180, "strength": 1.0, "mode": "interpolated", "expected_levels": [0, 0, 0, 1.0, 0, 0]},
+    {"name": "uneven_layout_actual_gap", "motor_angles_deg": [0, 90, 150, 270], "bearing_deg": 120, "strength": 1.0, "mode": "interpolated", "expected_levels": [0, 0.5, 0.5, 0]},
+    {"name": "uneven_layout_wrap_gap", "motor_angles_deg": [10, 90, 180, 270], "bearing_deg": 0, "strength": 1.0, "mode": "interpolated", "expected_levels": [0.9, 0, 0, 0.1]}
+  ],
+  "strength_cases": [
+    {"distance_m": 10, "expected": 0.2},
+    {"distance_m": 5, "expected": 0.6},
+    {"distance_m": 0, "expected": 1.0},
+    {"distance_m": 25, "expected": 0.2}
+  ],
+  "selection_cases": [
+    {"name": "keep_current_within_hysteresis", "current_id": "a",
+     "targets": [{"id": "a", "bearing_deg": 0, "distance_m": 7, "time_to_contact_s": 4.0}, {"id": "b", "bearing_deg": 90, "distance_m": 6.25, "time_to_contact_s": 3.5}],
+     "expected_id": "a"},
+    {"name": "switch_at_20_percent", "current_id": "a",
+     "targets": [{"id": "a", "bearing_deg": 0, "distance_m": 7, "time_to_contact_s": 4.0}, {"id": "b", "bearing_deg": 90, "distance_m": 5.5, "time_to_contact_s": 3.0}],
+     "expected_id": "b"},
+    {"name": "approaching_beats_near_stationary", "current_id": null,
+     "targets": [{"id": "far", "bearing_deg": 0, "distance_m": 9.5, "time_to_contact_s": 5.6667}, {"id": "near", "bearing_deg": 180, "distance_m": 2.0, "time_to_contact_s": null}],
+     "expected_id": "far"},
+    {"name": "approaching_replaces_stationary_selection", "current_id": "near",
+     "targets": [{"id": "far", "bearing_deg": 0, "distance_m": 9.5, "time_to_contact_s": 5.6667}, {"id": "near", "bearing_deg": 180, "distance_m": 2.0, "time_to_contact_s": null}],
+     "expected_id": "far"},
+    {"name": "emergency_switch", "current_id": "a",
+     "targets": [{"id": "a", "bearing_deg": 0, "distance_m": 3, "time_to_contact_s": 1.2}, {"id": "b", "bearing_deg": 90, "distance_m": 2.4, "time_to_contact_s": 0.99}],
+     "expected_id": "b"},
+    {"name": "both_imminent_use_retention", "current_id": "a",
+     "targets": [{"id": "a", "bearing_deg": 0, "distance_m": 2.4, "time_to_contact_s": 0.9}, {"id": "b", "bearing_deg": 90, "distance_m": 2.2, "time_to_contact_s": 0.8}],
+     "expected_id": "a"},
+    {"name": "current_disappeared", "current_id": "gone",
+     "targets": [{"id": "b", "bearing_deg": 90, "distance_m": 5, "time_to_contact_s": null}],
+     "expected_id": "b"},
+    {"name": "nearest_stationary_tie_by_id", "current_id": null,
+     "targets": [{"id": "z", "bearing_deg": 0, "distance_m": 5, "time_to_contact_s": null}, {"id": "m", "bearing_deg": 90, "distance_m": 5, "time_to_contact_s": null}],
+     "expected_id": "m"},
+    {"name": "empty", "current_id": "a", "targets": [], "expected_id": null}
+  ]
+}

@@ -1,0 +1,10 @@
+# Godot
+.godot/
+/android/
+game/export/
+# Python
+__pycache__/
+*.pyc
+.venv/
+# Local logs and trial results
+logs/
