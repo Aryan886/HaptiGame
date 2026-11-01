@@ -6,6 +6,8 @@ extends CanvasLayer
 const UiTheme := preload("res://scripts/ui_theme.gd")
 const Menus := preload("res://scripts/menus.gd")
 const HeadWidget := preload("res://scripts/head_widget.gd")
+const DAMAGE_SHADER := preload("res://shaders/damage_vignette.gdshader")
+const DAMAGE_FLASH_S := 0.3
 
 enum Widget { OFF, MOTORS, FULL }
 
@@ -32,6 +34,8 @@ var _dial_panel: PanelContainer
 var _dial: PracticeDial
 var _dial_label: Label
 var _crosshair: Crosshair
+var _damage_rect: ColorRect
+var _damage := 0.0
 var _widget_mode := Widget.MOTORS
 var _in_play := true
 
@@ -43,6 +47,15 @@ func _ready() -> void:
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.theme = UiTheme.theme()
 	add_child(root)
+
+	# Under everything else: a symmetric red vignette when the player is hit.
+	_damage_rect = ColorRect.new()
+	_damage_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_damage_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_damage_rect.material = ShaderMaterial.new()
+	_damage_rect.material.shader = DAMAGE_SHADER
+	_damage_rect.visible = false
+	root.add_child(_damage_rect)
 
 	_build_top_bar(root)
 
@@ -262,6 +275,24 @@ func _apply_widget() -> void:
 	_debug_panel.visible = _in_play and _widget_mode == Widget.FULL
 	_head.full_debug = _widget_mode == Widget.FULL
 	_dial_panel.visible = _dial_panel.visible and _in_play
+
+
+func _process(delta: float) -> void:
+	if _damage > 0.0:
+		_damage = maxf(_damage - delta / DAMAGE_FLASH_S, 0.0)
+		_damage_rect.material.set_shader_parameter("strength", _damage)
+		_damage_rect.visible = _damage > 0.0
+
+
+## Uniform red flash on every screen edge; never directional.
+func flash_damage() -> void:
+	_damage = 1.0
+	_damage_rect.material.set_shader_parameter("strength", 1.0)
+	_damage_rect.visible = true
+
+
+func is_damage_flash_showing() -> bool:
+	return _damage_rect.visible
 
 
 func flash_hit() -> void:

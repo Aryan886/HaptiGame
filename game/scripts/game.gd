@@ -35,6 +35,7 @@ const DRONE_SCENE := preload("res://scenes/drone.tscn")
 const HapticsClient := preload("res://scripts/haptics_client.gd")
 const DroneScript := preload("res://scripts/drone.gd")
 const Hud := preload("res://scripts/hud.gd")
+const GRID_SHADER := preload("res://shaders/grid_floor.gdshader")
 const ENEMY_LAYER := 2
 
 @export_group("Round")
@@ -57,6 +58,11 @@ const ENEMY_LAYER := 2
 @export var showcase_distance_m := 6.0
 @export var orbit_radius_m := 7.0
 @export var orbit_speed_deg := 25.0
+
+@export_group("Arena")
+@export var platform_radius_m := 12.0
+@export var pylon_count := 16
+@export var pylon_radius_m := 14.5
 
 @export_group("Trial")
 @export var trial_bearings_deg: Array[float] = [0.0, 45.0, 90.0, 135.0, 180.0, 225.0, 270.0, 315.0]
@@ -97,6 +103,9 @@ var _end_hold_left := 0.0
 var _end_hold_action := Callable()
 var _rng := RandomNumberGenerator.new()
 var _sfx := {}
+var _effects: Node3D
+var _laser_material: StandardMaterial3D
+var _burst_mesh: Mesh
 
 var _trial_queue: Array[float] = []
 var _trial_total := 0
@@ -115,6 +124,7 @@ func _ready() -> void:
 	_rng.randomize()
 	_register_input_actions()
 	_build_arena()
+	_build_effects()
 	_build_sfx()
 	player.shot_fired.connect(_on_shot_fired)
 	haptics.telemetry_changed.connect(_refresh_hud)
@@ -542,6 +552,7 @@ func _on_drone_defeated(d: Area3D) -> void:
 	score += 1
 	_play("hit")
 	hud.flash_hit()
+	_spawn_burst(d.global_position)  # the drone is resolved, so this reveals nothing
 	if drones.is_empty() and scenario in [Scenario.STATIONARY_REAR, Scenario.ORBIT, Scenario.HIDDEN_APPROACH]:
 		_show_results(_single_target_rows("Target destroyed", d, true))
 
@@ -551,6 +562,7 @@ func _on_drone_contacted(d: Area3D) -> void:
 	haptics.damage_count += 1  # sent with the snapshot below; the bridge buzzes all motors
 	_remove_drone(d)
 	_play("damage")
+	hud.flash_damage()
 	if health <= 0:
 		_hold_then(_game_over.bind("Out of health"))
 	elif drones.is_empty() and scenario == Scenario.HIDDEN_APPROACH:
@@ -561,9 +573,10 @@ func _on_shot_fired(collider: Object) -> void:
 	if state != "playing":
 		return
 	if scenario == Scenario.TRIAL:
-		_record_trial_response()
+		_record_trial_response()  # clicks are responses: no shot effects at all
 		return
 	_play("shot")
+	_spawn_laser(player.muzzle_position(), player.last_shot_end)
 	if collider is Area3D and collider.is_in_group("drones") and collider.alive:
 		collider.resolve_defeat()
 
@@ -695,49 +708,174 @@ func _register_input_actions() -> void:
 		InputMap.action_add_event("shoot", click)
 
 
+## Night defence platform: emissive grid floor, gradient sky, light fog and
+## identical, evenly spaced pylons. Nothing in it is unique, so no landmark
+## can line up with a target.
 func _build_arena() -> void:
-	var env := WorldEnvironment.new()
-	env.environment = Environment.new()
-	env.environment.background_mode = Environment.BG_COLOR
-	env.environment.background_color = Color(0.05, 0.06, 0.1)
-	env.environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.environment.ambient_light_color = Color(0.5, 0.55, 0.65)
-	env.environment.ambient_light_energy = 0.6
-	add_child(env)
+	var horizon := Color(0.06, 0.1, 0.16)
+	var sky_material := ProceduralSkyMaterial.new()
+	sky_material.sky_top_color = Color(0.008, 0.012, 0.03)
+	sky_material.sky_horizon_color = horizon
+	sky_material.ground_horizon_color = horizon
+	sky_material.ground_bottom_color = Color(0.0, 0.0, 0.01)
+	var env := Environment.new()
+	env.background_mode = Environment.BG_SKY
+	env.sky = Sky.new()
+	env.sky.sky_material = sky_material
+	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	env.ambient_light_color = Color(0.4, 0.5, 0.65)
+	env.ambient_light_energy = 0.45
+	env.fog_enabled = true
+	env.fog_light_color = horizon
+	env.fog_density = 0.035
+	env.fog_sky_affect = 0.0
+	var world := WorldEnvironment.new()
+	world.environment = env
+	add_child(world)
 
-	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-55, 30, 0)
-	sun.light_energy = 0.9
-	add_child(sun)
+	var moon := DirectionalLight3D.new()
+	moon.rotation_degrees = Vector3(-50, 35, 0)
+	moon.light_color = Color(0.65, 0.75, 1.0)
+	moon.light_energy = 0.55
+	moon.sky_mode = DirectionalLight3D.SKY_MODE_LIGHT_ONLY  # no moon disc in the sky
+	add_child(moon)
 
-	_add_static_box(Vector3(40, 0.2, 40), Vector3(0, -0.1, 0), Color(0.22, 0.24, 0.28))
-	# Pillars give rotation a visual reference; they carry no target information.
-	for i in 12:
-		var a := deg_to_rad(i * 30.0)
-		var tall := i % 3 == 0
-		var color := Color(0.35, 0.55, 0.85) if tall else Color(0.45, 0.47, 0.5)
-		var height := 4.0 if tall else 2.5
-		_add_static_box(Vector3(1, height, 1), Vector3(sin(a) * 16.0, height / 2.0, -cos(a) * 16.0), color)
+	var floor_material := ShaderMaterial.new()
+	floor_material.shader = GRID_SHADER
+	floor_material.set_shader_parameter("radius_m", platform_radius_m)
+	var platform := CylinderMesh.new()
+	platform.top_radius = platform_radius_m
+	platform.bottom_radius = platform_radius_m
+	platform.height = 0.6
+	platform.radial_segments = 96
+	platform.rings = 1
+	platform.material = floor_material
+	var platform_shape := CylinderShape3D.new()
+	platform_shape.radius = platform_radius_m
+	platform_shape.height = 0.6
+	_add_static(platform, platform_shape, Vector3(0, -0.3, 0))
+
+	var ground := PlaneMesh.new()
+	ground.size = Vector2(240, 240)
+	ground.material = _flat_material(Color(0.015, 0.02, 0.03), 0.9)
+	var ground_shape := BoxShape3D.new()
+	ground_shape.size = Vector3(240, 0.2, 240)
+	var ground_body := _add_static(ground, ground_shape, Vector3(0, -0.6, 0))
+	ground_body.get_child(1).position.y = -0.1
+
+	var hull := BoxMesh.new()
+	hull.size = Vector3(0.4, 3.2, 0.4)
+	hull.material = _flat_material(Color(0.1, 0.12, 0.15), 0.5)
+	var hull_shape := BoxShape3D.new()
+	hull_shape.size = hull.size
+	var light := _flat_material(Color(0.22, 0.88, 1.0), 1.0)
+	light.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	var cap := BoxMesh.new()
+	cap.size = Vector3(0.5, 0.1, 0.5)
+	cap.material = light
+	var band := BoxMesh.new()
+	band.size = Vector3(0.42, 0.05, 0.42)
+	band.material = light
+	for i in pylon_count:
+		# Offset half a step so no pylon sits on a scripted bearing.
+		var a := deg_to_rad((i + 0.5) * 360.0 / pylon_count)
+		var pylon := _add_static(hull, hull_shape, Vector3(sin(a), 0, -cos(a)) * pylon_radius_m + Vector3(0, 1.0, 0))
+		for part in [[cap, 1.65], [band, 0.6]]:
+			var m := MeshInstance3D.new()
+			m.mesh = part[0]
+			m.position.y = part[1]
+			pylon.add_child(m)
 
 
-func _add_static_box(size: Vector3, pos: Vector3, color: Color) -> void:
+func _add_static(mesh: Mesh, shape: Shape3D, pos: Vector3) -> StaticBody3D:
 	var body := StaticBody3D.new()
 	body.collision_layer = 1
 	body.position = pos
-	var mesh := MeshInstance3D.new()
-	var box := BoxMesh.new()
-	box.size = size
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = color
-	box.material = mat
-	mesh.mesh = box
-	body.add_child(mesh)
-	var shape := CollisionShape3D.new()
-	var box_shape := BoxShape3D.new()
-	box_shape.size = size
-	shape.shape = box_shape
-	body.add_child(shape)
+	var instance := MeshInstance3D.new()
+	instance.mesh = mesh
+	body.add_child(instance)
+	var collider := CollisionShape3D.new()
+	collider.shape = shape
+	body.add_child(collider)
 	add_child(body)
+	return body
+
+
+func _flat_material(color: Color, roughness: float) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = color
+	m.roughness = roughness
+	return m
+
+
+# --- effects ---------------------------------------------------------------
+
+func _build_effects() -> void:
+	_effects = Node3D.new()
+	_effects.process_mode = Node.PROCESS_MODE_PAUSABLE
+	add_child(_effects)
+	_laser_material = _flat_material(Color(0.5, 0.95, 1.0), 1.0)
+	_laser_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	var spark := BoxMesh.new()
+	spark.size = Vector3(0.08, 0.08, 0.08)
+	spark.material = _flat_material(Color(1.0, 0.45, 0.15), 1.0)
+	spark.material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_burst_mesh = spark
+
+
+## About 60 ms of laser from just below the camera to where the shot ended.
+func _spawn_laser(from: Vector3, to: Vector3) -> void:
+	var length := from.distance_to(to)
+	if length < 0.05:
+		return
+	var beam := MeshInstance3D.new()
+	var box := BoxMesh.new()
+	box.size = Vector3(0.006, 0.006, length)
+	box.material = _laser_material
+	beam.mesh = box
+	beam.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_effects.add_child(beam)
+	var up := Vector3.UP if absf((to - from).normalized().y) < 0.99 else Vector3.FORWARD
+	beam.look_at_from_position(from.lerp(to, 0.5), to, up)
+	var flash := MeshInstance3D.new()
+	var bulb := SphereMesh.new()
+	bulb.radius = 0.012
+	bulb.height = 0.024
+	bulb.material = _laser_material
+	flash.mesh = bulb
+	flash.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_effects.add_child(flash)
+	flash.global_position = from
+	for node in [beam, flash]:
+		get_tree().create_timer(0.06).timeout.connect(node.queue_free)
+
+
+## Short burst of sparks where a drone was destroyed.
+func _spawn_burst(pos: Vector3) -> void:
+	var p := CPUParticles3D.new()
+	p.one_shot = true
+	p.explosiveness = 0.95
+	p.amount = 32
+	p.lifetime = 0.7
+	p.mesh = _burst_mesh
+	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	p.direction = Vector3.UP
+	p.spread = 180.0
+	p.initial_velocity_min = 2.0
+	p.initial_velocity_max = 5.5
+	p.gravity = Vector3(0, -7, 0)
+	p.damping_min = 1.0
+	p.damping_max = 3.0
+	p.scale_amount_min = 0.5
+	p.scale_amount_max = 1.2
+	var shrink := Curve.new()
+	shrink.add_point(Vector2(0, 1))
+	shrink.add_point(Vector2(1, 0))
+	p.scale_amount_curve = shrink
+	_effects.add_child(p)
+	p.global_position = pos
+	p.emitting = true
+	get_tree().create_timer(1.2).timeout.connect(p.queue_free)
 
 
 ## Non-spatial generated tones: they carry no directional information.

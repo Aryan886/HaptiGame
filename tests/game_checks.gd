@@ -59,19 +59,24 @@ func _run() -> void:
 
 	# Hidden stationary target: tracked while invisible, revealed once in view, stays revealed.
 	var d: Area3D = game.drones["drone_001"]
-	_check("hidden drone invisible", not d.mesh.visible, d.mesh.visible)
+	_check("hidden drone invisible", not d.visual.visible, d.visual.visible)
+	var renderers: Array = d.find_children("*", "VisualInstance3D", true, false)
+	_check("every drone mesh and light is under visual", renderers.size() >= 10 and renderers.all(func(n): return d.visual.is_ancestor_of(n)), renderers)
+	_check("hidden drone: nothing renders", renderers.all(func(n): return not n.is_visible_in_tree()), "")
 	_check("hidden drone still in snapshot", client.targets.size() == 1, client.targets)
 	game.player.rotate_y(-deg_to_rad(130.0))  # 5 deg off target: inside the 15 deg cone
 	await _wait(0.1)
-	_check("revealed inside cone", d.mesh.visible, d.mesh.visible)
+	_check("revealed inside cone", d.visual.visible, d.visual.visible)
 	game.player.rotate_y(deg_to_rad(130.0))
 	await _wait(0.1)
-	_check("stays revealed", d.mesh.visible, d.mesh.visible)
+	_check("stays revealed", d.visual.visible, d.visual.visible)
 
 	# Double resolution counts once.
 	d.resolve_defeat()
 	d.resolve_defeat()
 	_check("hit marker on defeat", game.hud.is_hit_marker_showing(), "")
+	var bursts: Array = game._effects.find_children("*", "CPUParticles3D", false, false)
+	_check("destruction burst on defeat only", bursts.size() == 1 and bursts[0].global_position.is_equal_approx(d.global_position), bursts)
 	await _wait(0.05)
 	_check("defeat counted once", game.score == 1 and game.drones.is_empty(), [game.score, game.drones])
 	_check("completion -> results", game.state == "results" and game.hud.menus.button_labels() == ["Retry", "Title"], [game.state, game.hud.menus.button_labels()])
@@ -143,6 +148,7 @@ func _run() -> void:
 	game.drones.values()[0].approach_speed_mps = 40.0
 	await _wait(0.4)
 	_check("reached: damage counted", client.damage_count == damage_before + 1, client.damage_count)
+	_check("damage flash on contact", game.hud.is_damage_flash_showing(), "")
 	_check("reached: holding in play", game.state == "playing" and client.game_state == "playing" and client.targets.is_empty(), [game.state, client.targets])
 	await _wait(0.6)
 	_check("reached -> results after hold", game.state == "results", game.state)
@@ -166,9 +172,11 @@ func _run() -> void:
 		var bearing = HapticsClient.horizontal_bearing_deg(game.player.view_basis(), Vector3.ZERO, target.global_position)
 		game.player.rotate_y(-deg_to_rad(bearing))
 		await _wait(0.05)
-		_check("trial target never revealed (%d)" % i, not target.mesh.visible, target.mesh.visible)
+		_check("trial target never revealed (%d)" % i, not target.visual.visible, target.visual.visible)
+		var fx_before: int = game._effects.get_child_count()
 		game.player._cooldown = 0.0
 		game.player.try_shoot()
+		_check("trial click: no shot effects (%d)" % i, game._effects.get_child_count() == fx_before and not game.hud.is_hit_marker_showing(), game._effects.get_children())
 		await _wait(0.05)
 	var errors: Array = game._trial_errors
 	_check("trial errors recorded", errors.size() == 2 and errors.max() < 0.5, errors)
@@ -210,6 +218,11 @@ func _run() -> void:
 	# F1 cycles off -> motors only -> full debug; default is motors only.
 	game._widget_pref = Hud.Widget.MOTORS
 	game._start_scenario(2)
+	game.player._cooldown = 0.0
+	game.player.try_shoot()
+	_check("shot draws a laser", game._effects.find_children("*", "MeshInstance3D", false, false).size() == 2, game._effects.get_children())
+	await _wait(0.1)
+	_check("laser gone after ~60 ms", game._effects.find_children("*", "MeshInstance3D", false, false).is_empty(), game._effects.get_children())
 	_check("widget default motors only", game._widget_mode() == Hud.Widget.MOTORS and game.hud.is_widget_visible(), game._widget_mode())
 	_f1()
 	_check("F1 -> full debug", game._widget_mode() == Hud.Widget.FULL and game.hud.is_widget_visible(), game._widget_mode())

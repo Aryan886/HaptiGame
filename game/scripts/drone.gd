@@ -1,6 +1,8 @@
 extends Area3D
 ## One drone scene with three behaviors. Resolution (defeat or contact) happens
 ## exactly once: alive is cleared and collision disabled before any signal.
+## Everything that renders (meshes, the underglow light) lives under `visual`,
+## so hiding it hides every pixel, light and shadow of a hidden drone.
 
 signal defeated(drone: Area3D)
 signal contacted(drone: Area3D)
@@ -26,13 +28,37 @@ var found_at_s := -1.0
 
 var _orbit_angle_deg := 0.0
 var _orbit_radius_m := 0.0
+var _anim_time := 0.0
 
-@onready var mesh: MeshInstance3D = $mesh
+@onready var visual: Node3D = $visual
+@onready var underglow: OmniLight3D = $visual/underglow
 @onready var shape: CollisionShape3D = $shape
+@onready var _rotors: Array[Node3D] = [$visual/rotor_1, $visual/rotor_2, $visual/rotor_3, $visual/rotor_4]
+@onready var _strip: MeshInstance3D = $visual/strip
+
+var _strip_material: StandardMaterial3D
 
 
 func _ready() -> void:
-	mesh.visible = revealed
+	visual.visible = revealed
+	_anim_time = randf() * TAU
+	# Own copy so each drone pulses on its own phase.
+	_strip_material = _strip.mesh.material.duplicate()
+	_strip.material_override = _strip_material
+
+
+## Rotor spin, bob and the pulsing glow run on the visual only, and only while
+## it is shown; the collision shape never moves relative to the drone.
+func _process(delta: float) -> void:
+	if not visual.visible:
+		return
+	_anim_time += delta
+	for i in _rotors.size():
+		_rotors[i].rotate_y(delta * (40.0 if i % 2 == 0 else -40.0))
+	var pulse := 0.5 + 0.5 * sin(_anim_time * 6.0)
+	underglow.light_energy = 0.6 + 1.4 * pulse
+	_strip_material.emission_energy_multiplier = 1.0 + 2.5 * pulse
+	visual.position.y = 0.05 * sin(_anim_time * 2.3)
 
 
 ## Place the drone at a world-clockwise angle (0 = world -Z) and radius
@@ -46,13 +72,13 @@ func place(world_angle_deg: float, radius_m: float, height_m: float) -> void:
 func set_hidden(is_hidden: bool) -> void:
 	revealed = not is_hidden
 	if is_node_ready():
-		mesh.visible = revealed
+		visual.visible = revealed
 
 
 func reveal() -> void:
 	if alive and reveal_allowed and not revealed:
 		revealed = true
-		mesh.visible = true
+		visual.visible = true
 
 
 func behavior_name() -> String:

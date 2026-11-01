@@ -1,7 +1,7 @@
 # Phantom Defense: progress update
 
 **Date:** 1 November 2026
-**Status:** the software works end to end with simulated motor output. No haptics hardware exists yet. The next phase is UI polish so the demo is ready to present.
+**Status:** the software works end to end with simulated motor output. No haptics hardware exists yet. The UI polish pass (milestones M1–M4 of `build_ui.md`) is built and tested on branch `ui-polish`; packaging is next.
 
 ## Summary
 
@@ -19,9 +19,9 @@ Every live drone produces a directional cue as soon as it appears, including hid
 
   | Key | Scenario | Manual test |
   |---|---|---|
-  | 1 | Hidden stationary target behind the player, to the right | Works |
+  | 1 | Hidden target (stationary) | Works |
   | 2 | Orbiting target | Works |
-  | 3 | Hidden approaching target | Works |
+  | 3 | Approaching target (hidden) | Works |
   | 4 | 60-second survival round (health, score, timer, gradual speed-up) | Works |
   | 5 | Direction-identification trial (24 invisible targets, logged to CSV) | Works, but can't be played meaningfully without motors |
 
@@ -57,59 +57,62 @@ Every live drone produces a directional cue as soon as it appears, including hid
 
 | Check | Result |
 |---|---|
-| Python bridge tests: shared fixtures, input checks, watchdog, sessions, serial path against the fake device | 24 / 24 pass |
+| Python bridge tests: shared fixtures, input checks, watchdog, sessions, serial path against the fake device, damage pulse | 31 / 31 pass |
 | Godot direction checks against the shared fixtures, including that tilting the view up or down doesn't change the direction | 51 / 51 pass |
-| Godot gameplay checks: reveal, orbit, damage counted once, pause and focus loss, game over, trial CSV, no leftover drones after restarts | 23 / 23 pass |
-| End-to-end game and simulator bridge | Pass |
-| End-to-end game and fake serial device | Pass |
-| Rendered startup | Clean, about 70 FPS with one drone (V-Sync on) |
+| Godot gameplay checks: reveal, orbit, damage counted once, pause and focus loss, game over, trial CSV, no leftover drones after restarts, HUD theme, menus and guided demo, F1 widget states, serial defaults, practice trial, CSV columns, damage hold, shot effects | 90 / 90 pass |
+| End-to-end game and simulator bridge (including the damage buzz) | Pass |
+| End-to-end game and fake serial device (including the damage buzz) | Pass |
+| Rendered frame rate, scenario 4 with six live drones, all revealed and on screen, 1280×720, V-Sync off | 167–189 FPS (two runs); 266 FPS with six revealed drones off screen, 349 FPS with six hidden |
+| Rendered hidden-drone leak check: a hidden drone 25° off centre and 3 m away vs. the same frame with no drone | Pixel-identical (0 differing pixels); a revealed drone in the same frame differs in about 48,000 pixels |
 | Manual playtest of scenarios 1–4 | Working |
 
 ## Not yet verified
 
 - Nothing has run on physical hardware yet, and the firmware hasn't been compiled because the ESP32 board package isn't installed.
 - No exported executable yet, because the Godot export templates aren't installed. The demo currently runs through the Godot executable.
-- Frame rate with six drones and a five-minute stability run haven't been measured.
+- A five-minute stability run and three full demo cycles haven't been done. The frame rate with six drones is measured (above).
+- The UI polish was checked with headless tests and rendered screenshots, not by a person playing it. A hands-on playthrough of every scenario (especially mouse feel, the projector's colours and the readability of the haptics widget from the back of a room) is still to do.
 - pyserial isn't installed. It's only needed once hardware is connected.
 
-## Next: UI polish (priority)
+## UI polish (done, branch `ui-polish`)
 
-The aim is a demo that looks deliberate and is easy to follow for an audience that has never seen it. Polish must stay within the Compatibility renderer, keep 60 FPS, and never add visual or audio cues that reveal drone direction during haptics-only segments.
+Built to `build_ui.md` in four milestones, each committed with all checks passing. Polish stays within the Compatibility renderer and adds no cue that reveals a hidden drone's direction.
 
 ### 1. Menus and flow
 
-- [ ] Title screen with the project name, a one-line explanation, and buttons for each scenario plus the trial (keys 1–5 still work).
-- [ ] A short intro card for each scenario before it starts: what to do and what the participant should feel.
-- [ ] A results screen after each scenario or round: score, time taken, and how long it took to find the target.
-- [ ] Pause menu with resume, restart, a controls reference and a return to the title screen.
-- [ ] A prominent banner while haptics are off ("Haptics OFF: press E"), so a demo never starts with silent motors.
+- [x] Title screen with the project name, a one-line explanation, and buttons for the guided demo, each scenario and the practice trial (keys 1–5 still work).
+- [x] A short intro card for each scenario before it starts: what to do and what the participant should feel.
+- [x] A results screen after each scenario or round: outcome, time to find and destroy (1–3), score, time survived and hits (4), error statistics and the CSV path (trial).
+- [x] Pause menu with resume, restart, a controls reference and a return to the title screen.
+- [x] A persistent amber strip while haptics are off ("HAPTICS OFF · PRESS E"), on every screen.
 
 ### 2. HUD
 
-- [ ] A consistent visual theme: one font, a limited colour palette, and semi-transparent panels in place of outlined text.
-- [ ] Health shown as icons, and a timer bar for the survival round.
-- [ ] Clear status labels for the bridge (simulated / fake device / hardware ready / unavailable) with colour coding.
-- [ ] A cleaner crosshair, with a hit marker on a successful shot.
+- [x] A consistent visual theme: Chakra Petch (SIL OFL, bundled), a limited palette, and translucent bracketed panels in place of outlined text.
+- [x] Health shown as pips, and a segmented timer bar for the survival round.
+- [x] Colour-coded status chips for the bridge (simulated output / fake device / hardware ready with the ACK sequence / unavailable / stale).
+- [x] A thin bracket crosshair, with an X hit marker on a successful shot (never in the trial).
 
 ### 3. Motor dashboard (presenter view)
 
-- [ ] Redesign the motor ring for an audience: a body outline viewed from above, labelled motor positions and animated intensity.
-- [ ] A "motors only" dashboard mode with no drone-position dots, safe to show during practice.
-- [ ] A dashboard-visible column in the trial CSV, so practice runs aren't mistaken for haptics-only results.
-- [ ] A practice version of the trial for rehearsing before hardware arrives.
+- [x] A top-down head wearing the headband, with labelled motor positions from the bridge layout and animated intensity.
+- [x] F1 cycles off → motors only → full debug. Motors only is the default; on serial hardware the widget starts off in scenarios 1 and 3.
+- [x] `practice` and `dashboard_visible` columns in the trial CSV; the real trial forces the widget off.
+- [x] A practice version of the trial (8 targets, widget visible, true direction shown after each click).
 
 ### 4. Game feel and visuals
 
-- [ ] A more distinctive drone built from simple shapes, with a pulsing light (shown only when the drone is revealed).
-- [ ] Destruction effect, short muzzle flash and a damage flash at the edges of the screen.
-- [ ] Better-looking arena: gradient sky, subtle fog and improved lighting and floor material, all on the Compatibility renderer.
-- [ ] Optional: a short non-directional vibration on hit or damage, scheduled so it never overlaps a direction cue. This needs a team decision because the spec currently excludes it.
+- [x] A quadcopter built from primitives (spinning rotors, pulsing red underglow and strip), all of it hidden while the drone is hidden.
+- [x] Destruction burst, a 60 ms laser from below the camera, and a symmetric red damage flash on all screen edges.
+- [x] Circular night platform with an emissive grid floor, gradient sky, environment fog (verified to render in Compatibility 4.7.2) and identical, evenly spaced pylons.
+- [x] Damage buzz: all motors together for about 300 ms when the player loses health (team decision recorded in the overview; built in the bridge, obeys stop/watchdog/arming).
 
-### 5. Packaging
+## Next: packaging
 
 - [ ] Install the export templates for Godot 4.7.2 and export `game/export/phantom_defense.exe`.
 - [ ] Confirm `run_demo.bat` launches cleanly on the demo laptop.
-- [ ] Measure FPS with six drones and run a five-minute session plus three full demo cycles.
+- [x] Measure FPS with six drones (167–189 FPS, see test results).
+- [ ] Run a five-minute session plus three full demo cycles.
 - [ ] Record a backup video of the demo.
 
 ## Later: hardware integration (once parts arrive)
@@ -126,5 +129,5 @@ The aim is a demo that looks deliberate and is easy to follow for an audience th
 |---|---|---|
 | Hardware arrival date unknown | The physical demo and perception results depend on it | The software path is complete and tested in simulation; integration should need only configuration and calibration |
 | Firmware never compiled | Possible build fixes once the toolchain is installed | Logic mirrors the tested software firmware model; compile as soon as the ESP32 board package is installed |
-| UI effects could reveal drone direction | Would invalidate haptics-only trials | All new effects stay hidden while a drone is hidden and during the trial |
-| Hit or damage vibration (optional) | Could blur the direction cue | Decide as a team before building it |
+| UI effects could reveal drone direction | Would invalidate haptics-only trials | All new effects stay hidden while a drone is hidden and during the trial; checked with a rendered pixel comparison and the leak checklist in `build_ui.md` |
+| Damage buzz could blur the direction cue | The cue pauses for about 300 ms per hit | Agreed as a team; level and duration are in `bridge/config.json`, to be tuned with the wearer |
