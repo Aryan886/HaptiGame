@@ -6,11 +6,11 @@ extends Node3D
 enum Scenario { STATIONARY_REAR = 1, ORBIT = 2, HIDDEN_APPROACH = 3, SURVIVAL = 4, TRIAL = 5 }
 
 const SCENARIO_NAMES := {
-	Scenario.STATIONARY_REAR: "1 stationary rear",
-	Scenario.ORBIT: "2 orbit",
-	Scenario.HIDDEN_APPROACH: "3 hidden approach",
-	Scenario.SURVIVAL: "4 survival round",
-	Scenario.TRIAL: "5 direction trial",
+	Scenario.STATIONARY_REAR: "1 Hidden target",
+	Scenario.ORBIT: "2 Orbiting target",
+	Scenario.HIDDEN_APPROACH: "3 Approaching target",
+	Scenario.SURVIVAL: "4 Survival",
+	Scenario.TRIAL: "5 Direction trial",
 }
 const DRONE_SCENE := preload("res://scenes/drone.tscn")
 const HapticsClient := preload("res://scripts/haptics_client.gd")
@@ -172,14 +172,14 @@ func _start_scenario(s: Scenario) -> void:
 	match s:
 		Scenario.STATIONARY_REAR:
 			_spawn_drone(DroneScript.Behavior.STATIONARY, showcase_bearing_deg, showcase_distance_m)
-			message = "Find the drone behind you and shoot it"
+			message = "Find the drone and shoot it"
 		Scenario.ORBIT:
 			var d := _spawn_drone(DroneScript.Behavior.ORBITING, 90.0, orbit_radius_m)
 			d.orbit_speed_deg = orbit_speed_deg
-			message = "Track the orbiting drone"
+			message = "Follow the drone and shoot it"
 		Scenario.HIDDEN_APPROACH:
 			_spawn_drone(DroneScript.Behavior.APPROACHING, 180.0, spawn_radius_m)
-			message = "A drone is approaching"
+			message = "Find the drone before it reaches you"
 		Scenario.SURVIVAL:
 			message = "Survive %d s" % int(round_length_s)
 		Scenario.TRIAL:
@@ -430,17 +430,12 @@ func _view_world_angle_deg() -> float:
 func _refresh_hud() -> void:
 	if not is_node_ready():
 		return
-	var parts := ["Health %d" % health, "Score %d" % score]
-	if scenario == Scenario.SURVIVAL:
-		parts.append("Time %d" % ceili(time_left))
-	parts.append("Scenario %s" % SCENARIO_NAMES[scenario])
-	parts.append("Hidden %s" % ("on" if hidden_mode else "off"))
+	var tag := "HIDDEN" if hidden_mode and scenario != Scenario.TRIAL else ""
 	if state == "paused":
-		parts.append("PAUSED (Esc)")
-	hud.update_round("   ".join(parts))
-
-	var enabled_text := "HAPTICS ON" if haptics_latch and state == "playing" else "HAPTICS OFF (E enable, S stop)"
-	hud.update_haptics("%s\nmode: %s motors\n%s" % [enabled_text, haptic_mode, haptics.status_text()], haptics_latch)
+		tag = "PAUSED · ESC"
+	var timer := time_left / round_length_s if scenario == Scenario.SURVIVAL else -1.0
+	hud.update_round(SCENARIO_NAMES[scenario], tag, health, start_health, score, timer, time_left)
+	hud.update_haptics(haptics_latch, state == "playing", haptic_mode, haptics.status_text(), haptics.telemetry)
 	hud.show_message(message)
 
 	if hud.is_debug_visible():

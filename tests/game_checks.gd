@@ -19,6 +19,30 @@ func _run() -> void:
 	client = game.get_node("haptics_client")
 	await _wait(0.2)
 
+	# HUD theme: bundled font everywhere, no outlined text, no direction words.
+	var labels: Array = game.hud.find_children("*", "Label", true, false)
+	var off_font: Array = labels.filter(func(l): return not l.get_theme_font("font").resource_path.begins_with("res://fonts/"))
+	_check("all labels use bundled font", not labels.is_empty() and off_font.is_empty(), off_font)
+	var outlined: Array = labels.filter(func(l): return l.get_theme_constant("outline_size") > 0)
+	_check("no outlined labels", outlined.is_empty(), outlined)
+	var direction_words := ["rear", "behind", "left", "right", "front", "ahead", "north", "south", "east", "west"]
+	var leaky: Array = game.SCENARIO_NAMES.values().filter(func(n): return direction_words.any(func(w): return n.to_lower().contains(w)))
+	_check("scenario names name no direction", leaky.is_empty(), leaky)
+	var Hud = game.hud.get_script()
+	_check("chip: simulated", Hud.bridge_chip("simulated output", {})[0] == "SIMULATED OUTPUT", Hud.bridge_chip("simulated output", {}))
+	_check("chip: fake", Hud.bridge_chip("fake serial device (no hardware)", {})[0] == "FAKE DEVICE (NO HARDWARE)", "")
+	var ready_chip: Array = Hud.bridge_chip("serial ready (commands acknowledged, vibration not measured)", {"output_backend": "serial", "link_state": "ready", "last_ack_seq": 42})
+	_check("chip: hardware ready with ack", ready_chip[0] == "HARDWARE READY · ACK 42", ready_chip)
+	_check("chip: unavailable is red", Hud.bridge_chip("bridge unavailable", {})[1] == game.hud.UiTheme.RED, "")
+	var stale_chip: Array = Hud.bridge_chip("serial stale", {"output_backend": "serial", "link_state": "stale"})
+	_check("chip: stale is grey with ?", stale_chip[0].ends_with("?") and stale_chip[1] == game.hud.UiTheme.GREY, stale_chip)
+	_check("chip: socket error is grey with ?", Hud.bridge_chip("telemetry socket error", {})[0].ends_with("?"), "")
+	_check("haptics off strip at start", game.hud.is_off_strip_visible() and game.hud.haptics_chip_text() == "HAPTICS OFF", game.hud.haptics_chip_text())
+	game.haptics_latch = true
+	await _wait(0.05)
+	_check("strip hidden when enabled", not game.hud.is_off_strip_visible() and game.hud.haptics_chip_text() == "HAPTICS ON", game.hud.haptics_chip_text())
+	game.haptics_latch = false
+
 	# Hidden stationary target: tracked while invisible, revealed once in view, stays revealed.
 	var d: Area3D = game.drones["drone_001"]
 	_check("hidden drone invisible", not d.mesh.visible, d.mesh.visible)
@@ -33,6 +57,7 @@ func _run() -> void:
 	# Double resolution counts once.
 	d.resolve_defeat()
 	d.resolve_defeat()
+	_check("hit marker on defeat", game.hud.is_hit_marker_showing(), "")
 	await _wait(0.05)
 	_check("defeat counted once", game.score == 1 and game.drones.is_empty(), [game.score, game.drones])
 
