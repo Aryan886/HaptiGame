@@ -4,6 +4,17 @@
 **Target:** a reproducible Godot demo in three focused development days.  
 **Status:** proposed build specification; game, hardware readiness and perceptual results are not yet verified.
 
+## Decisions recorded 1 November 2026
+
+These supersede conflicting text below.
+
+- No hardware parts exist yet. Claude Code builds `game/`, `bridge/`, `tests/` and reference ESP32 firmware (`firmware/phantom_haptics/`); the game/bridge boundary is unchanged.
+- The Godot project lives in `game/`, pinned to **Godot 4.7.2-stable**, Compatibility renderer. This development laptop is the demonstration laptop.
+- Default hardware profile: six motors, `H,seq,duration_ms,M1..M6`. Eight motors stay a simulator profile until eight-channel firmware is agreed.
+- Haptics keys are **S** (stop) and **E** (enable). Scenarios are on keys **1–5**; key 5 runs a logged direction-identification trial (invisible targets, never revealed; the participant turns and clicks; 8 compass bearings × 3, shuffled; CSV under the Godot user data folder).
+- Audio is non-spatial generated tones only. The motor dashboard is toggled with F1 and hidden automatically during the trial.
+- `run_demo.bat [simulator|fake|serial]` starts the bridge, then the game. The game never launches the bridge.
+
 ## 1. Project goal and claim boundary
 
 Build a small **stationary first-person 3D defense game** that makes directional haptics the main interaction. The player stays at the center of an arena, turns the camera with the mouse, feels a cue for a threat outside the view, then finds and shoots it. A moving target demonstrates changing direction; an approaching target demonstrates increasing urgency.
@@ -82,7 +93,8 @@ For the controlled showcase, spawn one stationary target behind the player, let 
 | `toggle_haptic_mode` | M | Switch nearest/interpolated mapping without changing gameplay. |
 | `toggle_debug` | F1 | Show/hide target bearing and motor telemetry. |
 | `haptics_stop` | S | Latch haptics off immediately. |
-| `haptics_enable` |  E| Explicitly enable haptics after startup or a stop. |
+| `haptics_enable` | E | Explicitly enable haptics after startup or a stop. |
+| `scenario_1`…`scenario_5` | 1–5 | 1 stationary rear, 2 orbit, 3 hidden approach, 4 survival round, 5 logged direction trial. |
 
 Show health, score, remaining time, crosshair and current mode. Debug view shows selected target ID, bearing, distance, motor positions and commanded levels, bridge status and serial acknowledgement status. Start with haptics disabled. Losing window focus pauses the game and clears output; resuming requires explicit haptics enable.
 
@@ -188,7 +200,7 @@ Send one compact UTF-8 JSON object per UDP datagram to `127.0.0.1:9000` at `20 H
 - `bearing_deg`: finite degrees in `[0, 360)`, clockwise from camera forward. `distance_m`: finite horizontal distance, nonnegative; one Godot world unit is one meter for this project.
 - `time_to_contact_s`: finite nonnegative number for a directly approaching target, otherwise JSON `null`. Compute `max(distance_m - contact_radius_m, 0) / approach_speed_mps`; use `null` if speed is zero or the behavior does not approach. Never serialize infinity or NaN.
 - `targets` is the entire current set, including hidden and offscreen targets. Empty means no threat; disappearance cancels that target without requiring a separate destroy event.
-- On pause, game over, restart, loss of focus, F8 or normal exit, send `haptics_enabled: false` with `targets: []` immediately. Continue inactive snapshots while paused. Exit packets are best effort; watchdogs must handle a crash.
+- On pause, game over, restart, loss of focus, S (stop) or normal exit, send `haptics_enabled: false` with `targets: []` immediately. Continue inactive snapshots while paused. Exit packets are best effort; watchdogs must handle a crash.
 
 ### B. Bridge → Godot: commanded output and status
 
@@ -211,7 +223,7 @@ Return telemetry at up to 20 Hz, including when output is zero. This six-motor e
 }
 ```
 
-`input_seq` echoes the latest accepted game sequence. Ignore telemetry from another game session or an older input sequence. `output_backend` is `simulator` or `serial`; `link_state` is `simulated`, `ready`, `disconnected`, `stale` or `error`. `motor_levels` contains normalized final command values in the same order as `motor_angles_deg`, after calibration and limits; these are not measurements of vibration. For serial output, they correspond to the quantized device values divided by 255. `last_ack_seq` refers to the independent serial command sequence, or is `null` if none is known. It is not a game sequence or a physical sensor reading.
+`input_seq` echoes the latest accepted game sequence. Ignore telemetry from another game session or an older input sequence. `output_backend` is `simulator`, `serial` or `fake_serial` (in-process firmware model, no hardware); `link_state` is `simulated`, `ready`, `disconnected`, `stale` or `error`. `motor_levels` contains normalized final command values in the same order as `motor_angles_deg`, after calibration and limits; these are not measurements of vibration. For serial output, they correspond to the quantized device values divided by 255. `last_ack_seq` refers to the independent serial command sequence, or is `null` if none is known. It is not a game sequence or a physical sensor reading.
 
 When no target is selected, use `selected_target_id: null`, `bearing_deg: null` and all-zero levels. When the bridge is unavailable, do not retain the last displayed levels as though still active. The bridge supplies the active layout; if it has never connected, show “layout unknown” rather than guessing.
 
@@ -221,7 +233,7 @@ When no target is selected, use `selected_target_id: null`, `bearing_deg: null` 
 - Drain available packets without blocking; retain the newest valid snapshot rather than accumulating a queue of old cues. Reject duplicate/out-of-order sequences. Invalid packets do not refresh the watchdog; malformed input clears output and logs a useful, rate-limited error.
 - Track packet age using the receiver's monotonic clock. After `250 ms` without a newer valid snapshot, clear output and send device STOP. Game HUD treats telemetry older than `250 ms` as unavailable. Do not compare clocks from separate processes for freshness.
 - On a new game session, stop, reset selection and sequence state, and require an inactive snapshot followed by an explicit enable before physical output. Retire prior session IDs so delayed old packets cannot switch the bridge back. Support only one game producer at a time.
-- Startup, disconnect, timeout, protocol error and reconnect leave physical output disarmed. A fresh disabled→enabled transition after the link is ready is required to resume. Do not replay queued frames. F8 followed by F9 is the manual recovery path.
+- Startup, disconnect, timeout, protocol error and reconnect leave physical output disarmed. A fresh disabled→enabled transition after the link is ready is required to resume. Do not replay queued frames. S followed by E is the manual recovery path.
 - Check bind/send errors and show actionable status. UDP send success establishes neither a running receiver nor connected hardware; the official [PacketPeerUDP reference](https://docs.godotengine.org/en/stable/classes/class_packetpeerudp.html) describes its connectionless behavior.
 
 ### D. Bridge → controller: adapt to the actual firmware
@@ -235,6 +247,7 @@ H,42,150,0,153,0,0,0,0
 Fields are `H, sequence, duration_ms, M1, M2, M3, M4, M5, M6`. This separate example commands physical M2 at PWM 153 for 150 ms. Values are integers `0–255`, additionally restricted by calibrated caps; all channels replace the previous frame atomically. Array index `0` maps to physical `M1` only when confirmed by the channel map. Every line, including commands below, ends with a newline.
 
 - `HELLO` clears output and starts a new serial sequence session. Send it after connecting and before any nonzero command.
+- Device replies (as implemented in `firmware/phantom_haptics/` and `bridge/fake_device.py`): `READY,<N>` after `HELLO` reports the firmware channel count, which the bridge must match; `ACK,<seq>` reports acceptance of serial sequence `seq`; `ERR,<seq or ->,<reason>` reports rejection; `STOPPED` confirms `STOP`.
 - `ACK,42` reports acceptance/application of serial sequence 42; `ERR` reports rejection. Keep game and serial sequence counters separate.
 - `STOP` clears all outputs immediately and takes precedence over pending frames or acknowledgements.
 - Use full frames at no more than 20 Hz. Initial frame duration: `150 ms`; the existing proposal permits `1–500 ms`. Firmware must expire frames locally and also clear outputs after its proposed `500 ms` communication timeout. Invalid or duplicate commands must not extend output duration.
@@ -370,7 +383,7 @@ Suggested 90-second presentation: explain the provenance/reference frame; enable
 - [ ] Priority and hysteresis cases pass. Defeated/contacted drones cannot damage, score or emit a stale cue twice.
 - [ ] The same Godot build displays six- and eight-motor simulator layouts supplied by the bridge. Hardware-specific values do not appear in gameplay scripts.
 - [ ] Missing bridge does not freeze the game; missing hardware leaves a labelled simulator usable. Status distinguishes simulated commands, serial acknowledgement and unavailable output.
-- [ ] Empty targets, pause, focus loss, round end, F8, process loss, stale input and reconnect are tested. Software freshness stop occurs within 250 ms plus one bridge scheduling tick; firmware expiry is verified separately.
+- [ ] Empty targets, pause, focus loss, round end, S, process loss, stale input and reconnect are tested. Software freshness stop occurs within 250 ms plus one bridge scheduling tick; firmware expiry is verified separately.
 - [ ] Malformed values, NaN/non-finite input, oversized data, duplicate IDs and reordered packets are handled with bounded logging and no nonzero stale output.
 - [ ] Run Godot's import/parse check and a short headless start where supported, then manually exercise the rendered game. Run Python tests for priority, interpolation, validation and watchdog behavior. Record commands and results; headless checks do not replace visual or hardware tests.
 - [ ] Target 60 FPS with six drones on the demonstration laptop; record the observed result. A five-minute run and three full demo/restart cycles complete without an unhandled error or steadily growing enemy/node count.
